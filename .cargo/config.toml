@@ -1,0 +1,6 @@
+[build]
+target = "build/x86_64-max_os.json"
+
+[unstable]
+build-std-features = ["compiler-builtins-mem"]
+build-std = ["core", "compiler_builtins"]

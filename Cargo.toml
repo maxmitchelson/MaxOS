@@ -1,0 +1,14 @@
+[package]
+name = "max-os"
+version = "0.1.0"
+edition = "2024"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[dependencies]
+acpi = { version = "5.2.0", default-features = false }
+limine = "0.5.0"
