@@ -1,3 +1,6 @@
+[target.'cfg(all(target_os = "none"))']
+runner = "just run"
+
 [build]
 target = "build/x86_64-max_os.json"
 
