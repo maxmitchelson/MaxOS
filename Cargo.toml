@@ -10,5 +10,4 @@ panic = "abort"
 panic = "abort"
 
 [dependencies]
-acpi = { version = "5.2.0", default-features = false }
 limine = "0.5.0"
