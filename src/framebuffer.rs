@@ -1,3 +1,4 @@
+#[derive(Clone, Copy)]
 pub struct FramebufferInfo {
     pub pitch: usize,
     pub width: usize,
@@ -19,12 +20,11 @@ impl FramebufferInfo {
     }
 }
 
-pub struct Framebuffer<'buf> {
+pub struct Framebuffer {
     pub info: FramebufferInfo,
-    pub buffer: &'buf mut [u32],
+    pub buffer: &'static mut [u32],
 }
 
-#[allow(clippy::upper_case_acronyms)]
 pub struct RGB(u32);
 
 impl RGB {
@@ -64,7 +64,7 @@ impl From<u32> for RGB {
     }
 }
 
-impl<'buf> Framebuffer<'buf> {
+impl Framebuffer {
     #[inline(always)]
     pub fn set_pixel_value(&mut self, x: usize, y: usize, value: RGB) {
         self.buffer[x + y * self.info.pitch] = value.0;

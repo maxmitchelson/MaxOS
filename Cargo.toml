@@ -11,3 +11,5 @@ panic = "abort"
 
 [dependencies]
 limine = "0.5.0"
+noto-sans-mono-bitmap = {version = "0.3.1", features = ["size_20", "regular", "unicode_ranges_default", "unicode-basic-latin"], default-features=false}
+spin = "0.10.0"

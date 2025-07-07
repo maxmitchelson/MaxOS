@@ -1,48 +1,42 @@
 #![no_std]
 #![no_main]
 
-mod frambuffer;
+mod framebuffer;
 mod limine;
+mod terminal;
 
 use core::arch::asm;
 use core::panic::PanicInfo;
 
-use crate::frambuffer::RGB;
+use spin::{Lazy, RwLock};
+
+use crate::framebuffer::Framebuffer;
+use crate::terminal::Terminal;
+
+static FRAMEBUFFER: Lazy<RwLock<Framebuffer>> = Lazy::new(|| RwLock::new(limine::get_framebuffer()));
+static TERMINAL: Lazy<RwLock<Terminal>> = Lazy::new(|| RwLock::new(Terminal::new(&FRAMEBUFFER)));
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     limine::ensure_base_revision_support();
-    let mut framebuffer = limine::get_framebuffer();
 
-
-    let h = framebuffer.info.height / 256;
-    let gap = (framebuffer.info.height - (h * 256)) / 2;
-
-    for x in 0..framebuffer.info.width {
-        for y in 0..gap {
-            framebuffer.set_pixel_value(x, y, RGB::from_hex(0x000000));
-            framebuffer.set_pixel_value(
-                x,
-                framebuffer.info.height - y - 1,
-                RGB::from_hex(0xFFFFFF),
-            );
-        }
-    }
-
-    for i in 0..256 {
-        for x in 0..framebuffer.info.width {
-            for y in i * h..(i + 1) * h {
-                let color = i as u8;
-                framebuffer.set_pixel_value(x, y + gap, RGB::new(color, color, color));
-            }
-        }
-    }
+    println!("Hello MaxOS!");
 
     halt();
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    if let Some(location) = info.location() {
+        print!(
+            "Panic at {}:{}: {} \n",
+            location.file(),
+            location.line(),
+            info.message()
+        );
+    } else {
+        print!("Panic: {} \n", info.message())
+    }
     halt()
 }
 

@@ -1,4 +1,4 @@
-use crate::frambuffer::{Framebuffer, FramebufferInfo};
+use crate::framebuffer::{Framebuffer, FramebufferInfo};
 use core::slice;
 use limine::BaseRevision;
 use limine::framebuffer::MemoryModel;
@@ -53,7 +53,7 @@ pub fn get_physical_memory_offset() -> usize {
     HHDM_REQUEST.get_response().unwrap().offset() as usize
 }
 
-pub fn get_framebuffer<'a>() -> Framebuffer<'a> {
+pub fn get_framebuffer() -> Framebuffer {
     let limine_framebuffers = FRAMEBUFFER_REQUEST.get_response().unwrap().framebuffers();
 
     for buffer in limine_framebuffers {
