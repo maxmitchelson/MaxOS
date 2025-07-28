@@ -50,6 +50,7 @@ clean:
 
     qemu-system-x86_64 \
         -M q35 \
+        -m 1G \
         -drive if=pflash,unit=0,format=raw,file={{ovmf_code}},readonly=on \
         -drive if=pflash,unit=1,format=raw,file={{ovmf_vars}} \
         -cdrom {{iso_file}}

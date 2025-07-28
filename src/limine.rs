@@ -1,9 +1,10 @@
 use crate::framebuffer::{Framebuffer, FramebufferInfo};
 use core::slice;
-use limine::BaseRevision;
 use limine::framebuffer::MemoryModel;
-use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest, RsdpRequest};
+use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest};
 use limine::request::{RequestsEndMarker, RequestsStartMarker};
+use limine::{BaseRevision, memory_map};
+use spin::Lazy;
 
 /// Marks one or more static Limine bootloader request items to be placed in the
 /// `.limine_requests` section of the binary.
@@ -34,23 +35,41 @@ static _LIMINE_REQUESTS_END_MARKER: RequestsEndMarker = RequestsEndMarker::new()
 
 limine_request! {
     static BASE_REVISION: BaseRevision = BaseRevision::with_revision(3);
-    static RSDP_REQUEST: RsdpRequest = RsdpRequest::new();
     static HHDM_REQUEST: HhdmRequest = HhdmRequest::new();
     static FRAMEBUFFER_REQUEST: FramebufferRequest = FramebufferRequest::new();
     static MMAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
 }
+
+pub static HHDM_OFFSET: Lazy<usize> = Lazy::new(get_hhdm_offset);
+
+/// The initial memory map provided by the bootloader.
+///
+/// WARNING: This map remains unchanged after boot, even as the kernel allocates frames.
+/// It should therefore **NOT** be used as an up-to-date view of available memory.
+///
+/// Limine guarantees:
+/// - Entries are sorted in increasing order of [`base`](memory_map::Entry::base) address.
+/// - [`USABLE`](memory_map::EntryType::USABLE) and
+///   [`BOOTLOADER_RECLAIMABLE`](memory_map::EntryType::BOOTLOADER_RECLAIMABLE) regions:
+///   - Are non-overlapping.
+///   - Have [`base`](memory_map::Entry::base) and [`length`](memory_map::Entry::length)
+///     aligned to 4 KiB.
+/// - No alignment or overlap guarantees are made for other [`EntryType`](memory_map::EntryType)
+///   variants
+pub static BOOT_MEMORY_MAP: Lazy<&[&memory_map::Entry]> = Lazy::new(get_memory_map);
 
 pub fn ensure_base_revision_support() {
     assert!(BASE_REVISION.is_valid());
     assert!(BASE_REVISION.is_supported());
 }
 
-pub fn get_rsdp_address() -> usize {
-    RSDP_REQUEST.get_response().unwrap().address()
+fn get_hhdm_offset() -> usize {
+    HHDM_REQUEST.get_response().unwrap().offset() as usize
 }
 
-pub fn get_physical_memory_offset() -> usize {
-    HHDM_REQUEST.get_response().unwrap().offset() as usize
+fn get_memory_map() -> &'static [&'static memory_map::Entry] {
+    let mmap_response = MMAP_REQUEST.get_response().unwrap();
+    mmap_response.entries()
 }
 
 pub fn get_framebuffer() -> Framebuffer {

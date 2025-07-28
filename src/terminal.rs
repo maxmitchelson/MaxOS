@@ -33,6 +33,9 @@ impl Terminal {
             if ch == '\n' {
                 self.goto_next_line();
                 continue;
+            } else if ch == '\t' {
+                self.write_str("    ");
+                continue;
             }
 
             let raster_width = get_raster_width(FONT_STYLE, FONT_SIZE);

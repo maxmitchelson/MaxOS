@@ -25,6 +25,7 @@ pub struct Framebuffer {
     pub buffer: &'static mut [u32],
 }
 
+#[allow(clippy::upper_case_acronyms)]
 pub struct RGB(u32);
 
 impl RGB {

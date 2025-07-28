@@ -10,6 +10,14 @@ panic = "abort"
 panic = "abort"
 
 [dependencies]
+bitflags = "2.9.1"
 limine = "0.5.0"
 noto-sans-mono-bitmap = {version = "0.3.1", features = ["size_20", "regular", "unicode_ranges_default", "unicode-basic-latin"], default-features=false}
 spin = "0.10.0"
+
+# HACK: this is necessary as long as tests are not implemented, 
+# else rust-analyzer complains about a missing crate
+[[bin]]
+name="max-os"
+test=false
+bench=false

@@ -37,6 +37,7 @@ dependencies = [
 name = "max-os"
 version = "0.1.0"
 dependencies = [
+ "bitflags",
  "limine",
  "noto-sans-mono-bitmap",
  "spin",
