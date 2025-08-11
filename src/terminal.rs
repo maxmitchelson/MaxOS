@@ -2,7 +2,7 @@ use core::fmt::Write;
 
 use crate::framebuffer::{Framebuffer, RGB};
 
-use noto_sans_mono_bitmap::{get_raster, get_raster_width, FontWeight, RasterHeight};
+use noto_sans_mono_bitmap::{FontWeight, RasterHeight, get_raster, get_raster_width};
 use spin::RwLock;
 
 const HORIZONTAL_MARGIN: usize = 20;
@@ -10,6 +10,8 @@ const VERTICAL_MARGIN: usize = 20;
 
 const FONT_STYLE: FontWeight = FontWeight::Regular;
 const FONT_SIZE: RasterHeight = RasterHeight::Size20;
+
+pub struct TerminalDriver(pub RwLock<Terminal>);
 
 pub struct Terminal {
     cursor_x: usize,
@@ -33,13 +35,12 @@ impl Terminal {
             if ch == '\n' {
                 self.goto_next_line();
                 continue;
-            } else if ch == '\t' {
-                self.write_str("    ");
-                continue;
             }
 
             let raster_width = get_raster_width(FONT_STYLE, FONT_SIZE);
-            if self.cursor_x + raster_width + HORIZONTAL_MARGIN >= self.framebuffer.read().info.width {
+            if self.cursor_x + raster_width + HORIZONTAL_MARGIN
+                >= self.framebuffer.read().info.width
+            {
                 self.goto_next_line();
             }
             let raster = get_raster(ch, FONT_STYLE, FONT_SIZE).unwrap();
@@ -48,11 +49,15 @@ impl Terminal {
 
             for (y, row) in raster.raster().iter().enumerate() {
                 for (x, pixel) in row.iter().enumerate() {
-                    framebuffer.set_pixel_value(x+self.cursor_x, y+self.cursor_y, RGB::new(*pixel, *pixel, *pixel));
+                    framebuffer.set_pixel_value(
+                        x + self.cursor_x,
+                        y + self.cursor_y,
+                        RGB::new(*pixel, *pixel, *pixel),
+                    );
                 }
             }
 
-            self.cursor_x += raster_width
+            self.cursor_x += raster_width;
         }
     }
 
@@ -69,11 +74,18 @@ impl Write for Terminal {
     }
 }
 
+impl TerminalDriver {
+    pub fn write_fmt(&self, s: core::fmt::Arguments) -> core::fmt::Result {
+        self.0.write().write_fmt(s);
+        Ok(())
+    }
+}
+
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {{
         use core::fmt::Write;
-        let _ = write!($crate::TERMINAL.write(), $($arg)*);
+        let _ = $crate::TERMINAL.write_fmt(format_args!($($arg)*));
     }};
 }
 

@@ -8,9 +8,12 @@ mod memory;
 mod terminal;
 
 use core::arch::asm;
+use core::fmt::Write;
+use core::ops::Deref;
 use core::panic::PanicInfo;
 
 use spin::{Lazy, RwLock};
+use terminal::TerminalDriver;
 
 use crate::framebuffer::Framebuffer;
 use crate::memory::frame_allocator;
@@ -18,7 +21,8 @@ use crate::terminal::Terminal;
 
 static FRAMEBUFFER: Lazy<RwLock<Framebuffer>> =
     Lazy::new(|| RwLock::new(limine::get_framebuffer()));
-static TERMINAL: Lazy<RwLock<Terminal>> = Lazy::new(|| RwLock::new(Terminal::new(&FRAMEBUFFER)));
+static TERMINAL: Lazy<TerminalDriver> =
+    Lazy::new(|| TerminalDriver(RwLock::new(Terminal::new(&FRAMEBUFFER))));
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
