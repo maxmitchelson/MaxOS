@@ -13,6 +13,10 @@ pub struct PhysicalAddress(usize);
 pub struct VirtualAddress(usize);
 
 impl PhysicalAddress {
+    pub const fn null() -> Self {
+        Self(0)
+    }
+
     #[inline(always)]
     pub const fn value(&self) -> usize {
         self.0
@@ -106,7 +110,6 @@ impl fmt::Debug for PhysicalAddress {
             .finish()
     }
 }
-
 
 impl VirtualAddress {
     #[inline(always)]

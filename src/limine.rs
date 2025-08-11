@@ -44,9 +44,6 @@ pub static HHDM_OFFSET: Lazy<usize> = Lazy::new(get_hhdm_offset);
 
 /// The initial memory map provided by the bootloader.
 ///
-/// WARNING: This map remains unchanged after boot, even as the kernel allocates frames.
-/// It should therefore **NOT** be used as an up-to-date view of available memory.
-///
 /// Limine guarantees:
 /// - Entries are sorted in increasing order of [`base`](memory_map::Entry::base) address.
 /// - [`USABLE`](memory_map::EntryType::USABLE) and
@@ -56,7 +53,7 @@ pub static HHDM_OFFSET: Lazy<usize> = Lazy::new(get_hhdm_offset);
 ///     aligned to 4 KiB.
 /// - No alignment or overlap guarantees are made for other [`EntryType`](memory_map::EntryType)
 ///   variants
-pub static BOOT_MEMORY_MAP: Lazy<&[&memory_map::Entry]> = Lazy::new(get_memory_map);
+pub static BOOT_MEMORY_MAP: Lazy<BootMemoryMap> = Lazy::new(get_memory_map);
 
 pub fn ensure_base_revision_support() {
     assert!(BASE_REVISION.is_valid());
@@ -67,9 +64,22 @@ fn get_hhdm_offset() -> usize {
     HHDM_REQUEST.get_response().unwrap().offset() as usize
 }
 
-fn get_memory_map() -> &'static [&'static memory_map::Entry] {
+#[derive(Copy, Clone)]
+pub struct BootMemoryMap(&'static [&'static memory_map::Entry]);
+
+impl BootMemoryMap {
+    pub fn entries(&self) -> &'static [&'static memory_map::Entry] {
+        self.0
+    }
+
+    pub fn usable_entries(&self) -> impl DoubleEndedIterator<Item = &&'static memory_map::Entry> {
+        self.0.iter().filter(|e| e.entry_type == memory_map::EntryType::USABLE)
+    }
+}
+
+fn get_memory_map() -> BootMemoryMap {
     let mmap_response = MMAP_REQUEST.get_response().unwrap();
-    mmap_response.entries()
+    BootMemoryMap(mmap_response.entries())
 }
 
 pub fn get_framebuffer() -> Framebuffer {

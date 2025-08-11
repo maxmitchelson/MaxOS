@@ -6,7 +6,6 @@ use core::{
 
 use super::PhysicalAddress;
 
-
 /// A 64-bit page table.
 #[repr(C, align(4096))]
 pub struct PageTable {

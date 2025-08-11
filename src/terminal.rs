@@ -76,7 +76,7 @@ impl Write for Terminal {
 
 impl TerminalDriver {
     pub fn write_fmt(&self, s: core::fmt::Arguments) -> core::fmt::Result {
-        self.0.write().write_fmt(s);
+        let _ = self.0.write().write_fmt(s);
         Ok(())
     }
 }
@@ -84,7 +84,6 @@ impl TerminalDriver {
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {{
-        use core::fmt::Write;
         let _ = $crate::TERMINAL.write_fmt(format_args!($($arg)*));
     }};
 }

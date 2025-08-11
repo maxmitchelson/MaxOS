@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![allow(unused)] // temporary fix to get rid of diagnostic spam
 
 mod framebuffer;
 mod limine;
@@ -8,15 +7,13 @@ mod memory;
 mod terminal;
 
 use core::arch::asm;
-use core::fmt::Write;
-use core::ops::Deref;
 use core::panic::PanicInfo;
 
+use memory::frame_allocator::BuddyAllocator;
 use spin::{Lazy, RwLock};
 use terminal::TerminalDriver;
 
 use crate::framebuffer::Framebuffer;
-use crate::memory::frame_allocator;
 use crate::terminal::Terminal;
 
 static FRAMEBUFFER: Lazy<RwLock<Framebuffer>> =
@@ -31,17 +28,18 @@ pub extern "C" fn _start() -> ! {
     println!("Hello MaxOS!");
     println!("HHDM offset: {:#X}", *limine::HHDM_OFFSET);
 
-    let mut fralloc = frame_allocator::FrameAllocator::new();
-
-    let frame = fralloc.allocate();
+    let balloc = BuddyAllocator::new_embedded(*limine::BOOT_MEMORY_MAP).unwrap();
+    let frame = balloc.allocate(4096);
     let frame = unsafe { &mut *frame.to_virtual().to_ptr::<[u8; 4096]>() };
 
+    println!("test");
     for byte in &mut *frame {
         *byte = 1;
     }
 
     println!("{}", frame.iter().map(|x| *x as u64).sum::<u64>());
 
+    println!("Exit!");
     halt();
 }
 
