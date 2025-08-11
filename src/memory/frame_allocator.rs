@@ -1,6 +1,7 @@
 use core::slice;
 
-use crate::{limine::BootMemoryMap, memory::*};
+use crate::limine::BootMemoryMap;
+use crate::{memory::*, println};
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_SIZE_ORDER: usize = 12;
@@ -10,10 +11,23 @@ type MemoryRegion = (PhysicalAddress, PhysicalAddress);
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BlockState {
-    Free = 0x00,
-    Allocated = 0x01,
-    Split = 0x02,
+    Free = 0b00,
+    Allocated = 0b01,
+    Split = 0b10,
+    Full = 0b11,
     Reserved = 0xE7,
+}
+
+impl BlockState {
+    #[inline(always)]
+    pub const fn is_usable(&self) -> bool {
+        matches!(self, Self::Free | Self::Split)
+    }
+
+    #[inline(always)]
+    pub const fn is_free(&self) -> bool {
+        matches!(self, Self::Free)
+    }
 }
 
 #[derive(Debug)]
@@ -49,7 +63,7 @@ impl<'a> BuddyAllocator<'a> {
             .filter(|e| e.length as usize >= allocator_size);
 
         let allocator_start = match possible_allocator_pos.next() {
-            Some(region) => PhysicalAddress::from(region.base as usize),
+            Some(region) => PhysicalAddress::from_u64(region.base),
             None => return Err(FrallocError::NotEnoughAvailableMemory),
         };
 
@@ -76,8 +90,8 @@ impl<'a> BuddyAllocator<'a> {
         let last = usable.next_back().unwrap_or(first);
 
         Ok((
-            PhysicalAddress::from(first.base as usize),
-            PhysicalAddress::from((last.base + last.length) as usize),
+            PhysicalAddress::from_u64(first.base),
+            PhysicalAddress::from_u64(last.base + last.length),
         ))
     }
 
@@ -126,50 +140,76 @@ impl<'a> BuddyAllocator<'a> {
         let mut usable = memory_map.usable_entries();
 
         let first = usable.next().unwrap();
-        let mut start = PhysicalAddress::from((first.base + first.length) as usize);
+        let mut previous_end = PhysicalAddress::from_u64(first.base + first.length);
 
         for entry in usable {
-            self.reserve_range(start, PhysicalAddress::from(entry.base as usize));
-            start = PhysicalAddress::from((entry.base + entry.length) as usize);
+            let current_start = PhysicalAddress::from_u64(entry.base);
+            self.reserve_range(previous_end, current_start);
+            previous_end = PhysicalAddress::from_u64(entry.base + entry.length);
+        }
+
+        self.reserve_all_after(previous_end);
+    }
+
+    #[inline]
+    pub fn reserve_range(&mut self, start: PhysicalAddress, end: PhysicalAddress) {
+        if end <= start {
+            panic!("Cannot reserve memory: bad range ({start:?}, {end:?})");
+        }
+
+        let first_block = self.page_block_from(align_down(start, PAGE_SIZE));
+        let last_block = self.page_block_from(align_up(end, PAGE_SIZE));
+        let offset = Self::offset_for_order(self.max_order);
+
+        for block in first_block + offset..last_block + offset {
+            self.set_state(block, BlockState::Reserved);
+            self.update_ancestors(block);
         }
     }
 
     #[inline]
-    pub fn reserve_range(&mut self, start_address: PhysicalAddress, end_address: PhysicalAddress) {
-        if end_address <= start_address {
-            panic!("Cannot reserve memory: bad range ({start_address:?}, {end_address:?})");
+    pub fn reserve_all_after(&mut self, address: PhysicalAddress) {
+        let block = self.page_block_from(align_down(address + 1, PAGE_SIZE));
+        let offset = Self::offset_for_order(self.max_order);
+
+        for block in block + offset..self.block_tree.len() {
+            self.set_state(block, BlockState::Reserved);
+            self.update_ancestors(block);
         }
+    }
 
-        let first_block =
-            (align_down(start_address, PAGE_SIZE) - self.region_start).value() / PAGE_SIZE;
-        let last_block = (align_up(end_address, PAGE_SIZE) - self.region_start).value() / PAGE_SIZE;
+    #[inline(always)]
+    fn page_block_from(&self, address: PhysicalAddress) -> usize {
+        assert!(is_aligned(address, PAGE_SIZE));
+        (address - self.region_start).value() / PAGE_SIZE
+    }
 
-        let offset = 1 << self.max_order;
-
-        for i in first_block + offset..last_block + offset {
-            self.block_tree[i] = BlockState::Allocated;
-            self.split_parent(i);
-        }
+    #[inline(always)]
+    fn offset_for_order(order: u8) -> usize {
+        1 << order
     }
 
     #[inline(always)]
     fn buddy(idx: usize) -> Option<usize> {
-        if idx == 1 { None } else { Some(idx ^ 1) }
+        if idx > 1 { Some(idx ^ 1) } else { None }
     }
 
     #[inline(always)]
     fn parent(idx: usize) -> Option<usize> {
-        if idx == 1 { None } else { Some(idx >> 1) }
+        if idx > 1 { Some(idx >> 1) } else { None }
     }
 
     #[inline]
-    fn split_parent(&mut self, block: usize) {
+    fn update_ancestors(&mut self, block: usize) {
         let mut block = block;
         while let Some(parent) = Self::parent(block) {
-            if self.block_tree[parent] == BlockState::Split {
-                break;
-            } else {
-                self.block_tree[parent] = BlockState::Split;
+            if let Some(buddy) = Self::buddy(block) {
+                if self.state(block).is_usable() || self.state(buddy).is_usable() {
+                    self.set_state(parent, BlockState::Split);
+                    break;
+                } else {
+                    self.set_state(parent, BlockState::Full);
+                }
             }
 
             block = parent;
@@ -177,23 +217,59 @@ impl<'a> BuddyAllocator<'a> {
     }
 
     #[inline(always)]
+    fn state(&self, block: usize) -> BlockState {
+        self.block_tree[block]
+    }
+
+    #[inline(always)]
+    fn set_state(&mut self, block: usize, state: BlockState) {
+        self.block_tree[block] = state;
+    }
+
+    #[inline(always)]
     pub fn allocate(&mut self, size: usize) -> PhysicalAddress {
         self.allocate_order(self.order_for_size(size).unwrap())
     }
 
+    #[inline]
+    pub fn allocate_block(&mut self, block: usize, order: u8) -> PhysicalAddress {
+        self.block_tree[block] = BlockState::Allocated;
+        self.update_ancestors(block);
+        self.region_start + self.size_for_order(order) * (block - (1 << order))
+    }
+
     #[inline(always)]
     pub fn allocate_order(&mut self, order: u8) -> PhysicalAddress {
-        let offset = 1 << order;
-        let order_block_count = 1 << order;
+        let mut current_order = 0;
+        let mut current_block = 1;
+        loop {
+            if current_order == order {
+                if self.state(current_block).is_free() {
+                    return self.allocate_block(current_block, order);
+                } else if let Some(buddy) = Self::buddy(current_block) {
+                    if self.state(buddy).is_free() {
+                        return self.allocate_block(buddy, order);
+                    }
+                }
 
-        for i in offset..order_block_count + offset {
-            if self.block_tree[i] == BlockState::Free {
-                self.split_parent(i);
-                return self.region_start + self.size_for_order(order) * (i - offset);
+                // Should be caught earlier unless allocating order = 0
+                panic!("CRITICAL [FR0]: No free block for order size {order} in frame allocator");
             }
-        }
 
-        panic!("No free block for order size {order}");
+            if self.state(current_block).is_usable() {
+                current_block <<= 1;
+                current_order += 1;
+                continue;
+            } else if let Some(buddy) = Self::buddy(current_block) {
+                if self.state(buddy).is_usable() {
+                    current_block = buddy << 1;
+                    current_order += 1;
+                    continue;
+                }
+            }
+
+            panic!("CRITICAL [FR1]: No free block for order size {order} in frame allocator");
+        }
     }
 
     #[inline(always)]
@@ -225,5 +301,43 @@ impl<'a> BuddyAllocator<'a> {
     #[inline(always)]
     fn size_of_tree_for_order(order: u8) -> usize {
         1 << (order + 1)
+    }
+
+    pub fn stress(&mut self) {
+        let offset = 1 << self.max_order;
+        let mut count = 0usize;
+
+        for i in offset..offset + offset {
+            if self.block_tree[i] == BlockState::Free {
+                count += 1;
+            }
+        }
+
+        crate::println!("{} remaining free blocks", count);
+
+        for i in 0..count {
+            let frame = self.allocate(PAGE_SIZE);
+            let frame =
+                unsafe { slice::from_raw_parts_mut(frame.to_virtual().to_ptr::<u8>(), PAGE_SIZE) };
+
+            frame.fill((i & 0xFF) as u8);
+
+            if frame.iter().any(|&b| b != (i & 0xFF) as u8) {
+                println!("ERROR: invalid read/write for frame {}", i);
+            }
+        }
+
+        crate::println!("Still good");
+        self.allocate(4096);
+        crate::println!("Should not work");
+
+        let mut count = 0;
+        for i in offset..offset + offset {
+            if self.block_tree[i] == BlockState::Free {
+                count += 1;
+            }
+        }
+
+        crate::println!("{} remaining free blocks", count);
     }
 }

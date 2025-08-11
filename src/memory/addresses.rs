@@ -28,6 +28,11 @@ impl PhysicalAddress {
     }
 
     #[inline(always)]
+    pub const fn from_u64(address: u64) -> Self {
+        Self (address as usize)
+    }
+
+    #[inline(always)]
     pub fn to_virtual(self) -> VirtualAddress {
         VirtualAddress(*limine::HHDM_OFFSET + self.0)
     }
