@@ -1,9 +1,6 @@
 use core::slice;
 
-use crate::{
-    limine::BootMemoryMap,
-    memory::*,
-};
+use crate::{limine::BootMemoryMap, memory::*};
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_SIZE_ORDER: usize = 12;
@@ -34,7 +31,7 @@ pub struct BuddyAllocator<'a> {
     block_tree: &'a mut [BlockState],
 }
 
-// InFO: Managing max_order 25 = 128 GiB (2^25*4096 B) of memory results in 2^25 B = 32 MiB
+// INFO: Managing max_order 25 = 128 GiB (2^25*4096 B) of memory results in 2^25 B = 32 MiB
 // of allocator metadata. Setting an aribitrary limit of 128 GiB of physical memory would
 // allow reserving a fixed 32 MiB of space for the allocator, reducing the complexity of reserving
 // space for the allocator itself.
@@ -121,6 +118,10 @@ impl<'a> BuddyAllocator<'a> {
     }
 
     #[inline]
+    /// Reserves memory using the limine-provided mmap.
+    ///
+    /// Does not assume that all unusable memory is contained in the memory map and uses the holes
+    /// between [`USABLE`](limine::memory_map::EntryType::USABLE) entries for safety.
     pub fn set_reserved_from_mmap(&mut self, memory_map: BootMemoryMap) {
         let mut usable = memory_map.usable_entries();
 
@@ -134,11 +135,7 @@ impl<'a> BuddyAllocator<'a> {
     }
 
     #[inline]
-    pub fn reserve_range(
-        &mut self,
-        start_address: PhysicalAddress,
-        end_address: PhysicalAddress,
-    ) {
+    pub fn reserve_range(&mut self, start_address: PhysicalAddress, end_address: PhysicalAddress) {
         if end_address <= start_address {
             panic!("Cannot reserve memory: bad range ({start_address:?}, {end_address:?})");
         }
@@ -192,7 +189,7 @@ impl<'a> BuddyAllocator<'a> {
         for i in offset..order_block_count + offset {
             if self.block_tree[i] == BlockState::Free {
                 self.split_parent(i);
-                return self.region_start + self.size_for_order(order) * (i-offset);
+                return self.region_start + self.size_for_order(order) * (i - offset);
             }
         }
 
@@ -201,7 +198,7 @@ impl<'a> BuddyAllocator<'a> {
 
     #[inline(always)]
     fn size_for_order(&self, order: u8) -> usize {
-        PAGE_SIZE << (self.max_order-order)
+        PAGE_SIZE << (self.max_order - order)
     }
 
     #[inline(always)]
