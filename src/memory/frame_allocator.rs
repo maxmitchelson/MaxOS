@@ -38,15 +38,15 @@ pub enum FrallocError {
 
 #[derive(Debug)]
 #[repr(align(4096))]
-pub struct BuddyAllocator<'a> {
+pub struct BuddyAllocator {
     region_start: PhysicalAddress,
     region_length: usize,
     max_order: u8,
-    block_tree: &'a mut [BlockState],
+    block_tree: *mut [BlockState],
 }
 
-impl<'a> BuddyAllocator<'a> {
-    pub fn new_embedded(memory_map: BootMemoryMap) -> Result<&'a mut Self, FrallocError> {
+impl BuddyAllocator {
+    pub fn new_embedded(memory_map: BootMemoryMap) -> Result<*mut Self, FrallocError> {
         let (region_start, region_end) = Self::get_usable_region(memory_map)?;
 
         let length = (region_end - region_start).value();
@@ -64,7 +64,7 @@ impl<'a> BuddyAllocator<'a> {
         };
 
         let allocator = unsafe {
-            Self::init(
+            &mut *Self::init(
                 allocator_start,
                 align_up(allocator_start + allocator_size, PAGE_SIZE),
                 region_end,
@@ -76,7 +76,7 @@ impl<'a> BuddyAllocator<'a> {
 
         allocator.set_reserved_from_mmap(memory_map);
 
-        Ok(allocator)
+        Ok(allocator as *mut Self)
     }
 
     fn get_usable_region(memory_map: BootMemoryMap) -> Result<MemoryRegion, FrallocError> {
@@ -99,16 +99,16 @@ impl<'a> BuddyAllocator<'a> {
         max_order: u8,
         allocator_size: usize,
         tree_size: usize,
-    ) -> &'a mut Self {
+    ) -> *mut Self {
         unsafe {
             let allocator_space = slice::from_raw_parts_mut(
                 allocator_start.to_virtual().to_ptr::<u8>(),
                 allocator_size,
             );
-            allocator_space.fill(core::mem::zeroed());
+            allocator_space.fill(0);
 
-            let allocator = &mut *allocator_start.to_virtual().to_ptr::<BuddyAllocator>();
-            let tree = &mut *slice::from_raw_parts_mut(
+            let allocator = allocator_start.to_virtual().to_ptr::<BuddyAllocator>();
+            let tree = slice::from_raw_parts_mut(
                 (allocator_start + size_of::<BuddyAllocator>())
                     .to_virtual()
                     .to_ptr::<BlockState>(),
@@ -118,10 +118,10 @@ impl<'a> BuddyAllocator<'a> {
             tree.fill(BlockState::Free);
             tree[0] = BlockState::Reserved;
 
-            allocator.region_start = region_start;
-            allocator.region_length = (region_end - region_start).value();
-            allocator.max_order = max_order;
-            allocator.block_tree = tree;
+            (*allocator).region_start = region_start;
+            (*allocator).region_length = (region_end - region_start).value();
+            (*allocator).max_order = max_order;
+            (*allocator).block_tree = tree;
 
             allocator
         }
@@ -214,13 +214,23 @@ impl<'a> BuddyAllocator<'a> {
     }
 
     #[inline(always)]
+    fn block_tree(&self) -> &[BlockState] {
+        unsafe { &*self.block_tree }
+    }
+
+    #[inline(always)]
+    fn block_tree_mut(&mut self) -> &mut [BlockState] {
+        unsafe { &mut *self.block_tree }
+    }
+
+    #[inline(always)]
     fn state(&self, block: usize) -> BlockState {
-        self.block_tree[block]
+        self.block_tree()[block]
     }
 
     #[inline(always)]
     fn set_state(&mut self, block: usize, state: BlockState) {
-        self.block_tree[block] = state;
+        self.block_tree_mut()[block] = state;
     }
 
     #[inline(always)]
@@ -230,7 +240,7 @@ impl<'a> BuddyAllocator<'a> {
 
     #[inline]
     pub fn allocate_block(&mut self, block: usize, order: u8) -> PhysicalAddress {
-        self.block_tree[block] = BlockState::Allocated;
+        self.set_state(block, BlockState::Allocated);
         self.update_ancestors(block);
         self.region_start + self.size_for_order(order) * (block - (1 << order))
     }
@@ -335,7 +345,7 @@ impl<'a> BuddyAllocator<'a> {
         let mut count = 0usize;
 
         for i in offset..offset + offset {
-            if self.block_tree[i] == BlockState::Free {
+            if self.state(i) == BlockState::Free {
                 count += 1;
             }
         }
@@ -359,7 +369,7 @@ impl<'a> BuddyAllocator<'a> {
 
         let mut count = 0;
         for i in offset..offset + offset {
-            if self.block_tree[i] == BlockState::Free {
+            if self.state(i) == BlockState::Free {
                 count += 1;
             }
         }
@@ -376,9 +386,9 @@ impl<'a> BuddyAllocator<'a> {
 
         let mut addr = self.region_start;
         for i in offset..offset + offset {
-            if self.block_tree[i] == BlockState::Allocated {
+            if self.state(i) == BlockState::Allocated {
                 self.free(addr);
-                assert!(self.block_tree[i] == BlockState::Free)
+                assert!(self.state(i) == BlockState::Free)
             }
             addr += PAGE_SIZE;
         }

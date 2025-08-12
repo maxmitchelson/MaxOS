@@ -28,7 +28,7 @@ pub extern "C" fn _start() -> ! {
     println!("Hello MaxOS!");
     println!("HHDM offset: {:#X}", *limine::HHDM_OFFSET);
 
-    let fralloc = BuddyAllocator::new_embedded(*limine::BOOT_MEMORY_MAP).unwrap();
+    let fralloc = unsafe { &mut *BuddyAllocator::new_embedded(*limine::BOOT_MEMORY_MAP).unwrap() };
     let frame = fralloc.allocate(4096);
     let frame = unsafe { &mut *frame.to_virtual().to_ptr::<[u8; 4096]>() };
 
