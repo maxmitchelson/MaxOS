@@ -49,8 +49,10 @@ clean:
     {{limine_dir / "limine"}} bios-install --quiet {{iso_file}}
 
     qemu-system-x86_64 \
+        -cpu host \
+        -enable-kvm \
         -M q35 \
-        -m 1G \
+        -m 2G \
         -drive if=pflash,unit=0,format=raw,file={{ovmf_code}},readonly=on \
         -drive if=pflash,unit=1,format=raw,file={{ovmf_vars}} \
         -cdrom {{iso_file}}

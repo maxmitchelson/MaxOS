@@ -40,7 +40,7 @@ pub enum FrallocError {
 #[repr(align(4096))]
 pub struct BuddyAllocator {
     region_start: PhysicalAddress,
-    region_length: usize,
+    region_end: PhysicalAddress,
     max_order: u8,
     block_tree: *mut [BlockState],
 }
@@ -119,7 +119,7 @@ impl BuddyAllocator {
             tree[0] = BlockState::Reserved;
 
             (*allocator).region_start = region_start;
-            (*allocator).region_length = (region_end - region_start).value();
+            (*allocator).region_end = region_end;
             (*allocator).max_order = max_order;
             (*allocator).block_tree = tree;
 
@@ -147,14 +147,19 @@ impl BuddyAllocator {
         self.reserve_all_after(previous_end);
     }
 
+    #[inline(always)]
+    fn clamp_addr(&self, address: PhysicalAddress) -> PhysicalAddress {
+        return address.clamp(self.region_start, self.region_end);
+    }
+
     #[inline]
     pub fn reserve_range(&mut self, start: PhysicalAddress, end: PhysicalAddress) {
         if end <= start {
             panic!("Cannot reserve memory: bad range ({start:?}, {end:?})");
         }
 
-        let first_block = self.page_block_from(align_down(start, PAGE_SIZE));
-        let last_block = self.page_block_from(align_up(end, PAGE_SIZE));
+        let first_block = self.page_block_from(self.clamp_addr(align_down(start, PAGE_SIZE)));
+        let last_block = self.page_block_from(self.clamp_addr(align_up(end, PAGE_SIZE)));
         let offset = Self::offset_for_order(self.max_order);
 
         for block in first_block + offset..last_block + offset {
@@ -165,7 +170,7 @@ impl BuddyAllocator {
 
     #[inline]
     pub fn reserve_all_after(&mut self, address: PhysicalAddress) {
-        let block = self.page_block_from(align_down(address + 1, PAGE_SIZE));
+        let block = self.page_block_from(self.clamp_addr(align_down(address + 1, PAGE_SIZE)));
         let offset = Self::offset_for_order(self.max_order);
 
         for block in block + offset..self.block_tree.len() {
