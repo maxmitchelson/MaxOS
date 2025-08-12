@@ -45,10 +45,6 @@ pub struct BuddyAllocator<'a> {
     block_tree: &'a mut [BlockState],
 }
 
-// INFO: Managing max_order 25 = 128 GiB (2^25*4096 B) of memory results in 2^25 B = 32 MiB
-// of allocator metadata. Setting an aribitrary limit of 128 GiB of physical memory would
-// allow reserving a fixed 32 MiB of space for the allocator, reducing the complexity of reserving
-// space for the allocator itself.
 impl<'a> BuddyAllocator<'a> {
     pub fn new_embedded(memory_map: BootMemoryMap) -> Result<&'a mut Self, FrallocError> {
         let (region_start, region_end) = Self::get_usable_region(memory_map)?;
@@ -204,9 +200,10 @@ impl<'a> BuddyAllocator<'a> {
         let mut block = block;
         while let Some(parent) = Self::parent(block) {
             if let Some(buddy) = Self::buddy(block) {
-                if self.state(block).is_usable() || self.state(buddy).is_usable() {
+                if self.state(block).is_usable() && self.state(buddy).is_usable() {
+                    self.set_state(parent, BlockState::Free);
+                } else if self.state(block).is_usable() || self.state(buddy).is_usable() {
                     self.set_state(parent, BlockState::Split);
-                    break;
                 } else {
                     self.set_state(parent, BlockState::Full);
                 }
@@ -238,7 +235,7 @@ impl<'a> BuddyAllocator<'a> {
         self.region_start + self.size_for_order(order) * (block - (1 << order))
     }
 
-    #[inline(always)]
+    #[inline]
     pub fn allocate_order(&mut self, order: u8) -> PhysicalAddress {
         let mut current_order = 0;
         let mut current_block = 1;
@@ -272,6 +269,35 @@ impl<'a> BuddyAllocator<'a> {
         }
     }
 
+    #[inline]
+    pub fn free(&mut self, address: PhysicalAddress) {
+        let val = (address - self.region_start).value() >> PAGE_SIZE_ORDER;
+
+        let rev_order = if val == 0 {
+            self.max_order
+        } else {
+            val.trailing_zeros() as u8
+        };
+
+        let order_offset = Self::offset_for_order(self.max_order - rev_order);
+        let block_offset = val >> rev_order;
+
+        let mut block = order_offset + block_offset;
+
+        while !matches!(self.state(block), BlockState::Allocated) {
+            block <<= 1;
+
+            if block >= self.block_tree.len() {
+                panic!(
+                    "CRITICAL [FR2]: Could not free because no allocated block was found for address: {address:?}"
+                );
+            }
+        }
+
+        self.set_state(block, BlockState::Free);
+        self.update_ancestors(block);
+    }
+
     #[inline(always)]
     fn size_for_order(&self, order: u8) -> usize {
         PAGE_SIZE << (self.max_order - order)
@@ -280,7 +306,7 @@ impl<'a> BuddyAllocator<'a> {
     #[inline(always)]
     fn order_for_size(&self, size: usize) -> Option<u8> {
         if is_aligned(size, PAGE_SIZE) && is_power_of_two(size) {
-            return Some(self.max_order - (size >> 12).trailing_zeros() as u8);
+            return Some(self.max_order - (size >> PAGE_SIZE_ORDER).trailing_zeros() as u8);
         }
         None
     }
@@ -303,6 +329,7 @@ impl<'a> BuddyAllocator<'a> {
         1 << (order + 1)
     }
 
+    // TEST: should be marked as test when #4 is implemented
     pub fn stress(&mut self) {
         let offset = 1 << self.max_order;
         let mut count = 0usize;
@@ -315,7 +342,7 @@ impl<'a> BuddyAllocator<'a> {
 
         crate::println!("{} remaining free blocks", count);
 
-        for i in 0..count {
+        for i in 0..count - 1 {
             let frame = self.allocate(PAGE_SIZE);
             let frame =
                 unsafe { slice::from_raw_parts_mut(frame.to_virtual().to_ptr::<u8>(), PAGE_SIZE) };
@@ -327,9 +354,8 @@ impl<'a> BuddyAllocator<'a> {
             }
         }
 
-        crate::println!("Still good");
-        self.allocate(4096);
-        crate::println!("Should not work");
+        let frame = self.allocate(PAGE_SIZE);
+        crate::println!("Allocator fill completed");
 
         let mut count = 0;
         for i in offset..offset + offset {
@@ -337,7 +363,26 @@ impl<'a> BuddyAllocator<'a> {
                 count += 1;
             }
         }
-
         crate::println!("{} remaining free blocks", count);
+        crate::println!("last frame: {:?}", frame);
+
+        self.free(frame);
+        crate::println!("Last block freed");
+        self.allocate(PAGE_SIZE);
+        crate::println!("Last block reallocated");
+
+        // self.allocate(PAGE_SIZE);
+        // crate::println!("Should have paniced");
+
+        let mut addr = self.region_start;
+        for i in offset..offset + offset {
+            if self.block_tree[i] == BlockState::Allocated {
+                self.free(addr);
+                assert!(self.block_tree[i] == BlockState::Free)
+            }
+            addr += PAGE_SIZE;
+        }
+
+        println!("Freed all possible blocks")
     }
 }
