@@ -28,18 +28,19 @@ pub extern "C" fn _start() -> ! {
     println!("Hello MaxOS!");
     println!("HHDM offset: {:#X}", *limine::HHDM_OFFSET);
 
+    println!("Initializing frame allocator");
     let mut frame_allocator = BuddyAllocator::new_embedded(*limine::BOOT_MEMORY_MAP).unwrap();
+    println!("Allocating single frame");
     let frame = frame_allocator.allocate(4096);
     let frame = unsafe { &mut *frame.to_virtual().to_ptr::<[u8; 4096]>() };
 
-    println!("test");
+    println!("Writing to allocated frame");
     for byte in &mut *frame {
         *byte = 1;
     }
 
+    println!("Stress testing the frame allocator");
     frame_allocator.stress();
-
-    println!("{}", frame.iter().map(|x| *x as u64).sum::<u64>());
 
     println!("Exit!");
     halt();

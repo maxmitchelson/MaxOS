@@ -1,7 +1,7 @@
 use core::slice;
 
 use crate::limine::BootMemoryMap;
-use crate::{memory::*, println};
+use crate::memory::*;
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_SIZE_ORDER: usize = 12;
@@ -330,8 +330,12 @@ impl BuddyAllocator {
             }
         }
 
-        crate::println!("{} remaining free blocks", count);
-
+        crate::println!(
+            "Initial free {}KiB block count: {}",
+            PAGE_SIZE / 1024,
+            count
+        );
+        crate::println!("Allocating all blocks");
         for i in 0..count - 1 {
             let frame = self.allocate(PAGE_SIZE);
             let frame = unsafe {
@@ -341,12 +345,11 @@ impl BuddyAllocator {
             };
 
             if frame.iter().any(|&b| b != (i & 0xFF) as u8) {
-                println!("ERROR: invalid read/write for frame {}", i);
+                crate::println!("ERROR: invalid read/write for frame {}", i);
             }
         }
 
         let frame = self.allocate(PAGE_SIZE);
-        crate::println!("Allocator fill completed");
 
         let mut count = 0;
         for i in offset..offset + offset {
@@ -354,17 +357,15 @@ impl BuddyAllocator {
                 count += 1;
             }
         }
-        crate::println!("{} remaining free blocks", count);
-        crate::println!("last frame: {:?}", frame);
 
+        crate::println!("Allocator fill success status: [{}]", count == 0);
+        crate::println!("Address for last allocated frame: {:?}", frame);
+        crate::println!("Freeing and reallocating last allocated frame");
         self.free(frame);
-        crate::println!("Last block freed");
-        self.allocate(PAGE_SIZE);
-        crate::println!("Last block reallocated");
+        let new_frame = self.allocate(PAGE_SIZE);
+        crate::println!("Is same frame recieved: [{}]", new_frame == frame);
 
-        // self.allocate(PAGE_SIZE);
-        // crate::println!("Should have paniced");
-
+        crate::println!("Freeing all allocated blocks (includes these not allocated by this test)");
         let mut addr = self.region_start;
         for i in offset..offset + offset {
             if self.state(i) == BlockState::Allocated {
@@ -374,6 +375,6 @@ impl BuddyAllocator {
             addr += PAGE_SIZE;
         }
 
-        println!("Freed all possible blocks")
+        crate::println!("Freed all possible blocks")
     }
 }
