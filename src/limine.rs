@@ -1,10 +1,11 @@
 use crate::framebuffer::{Framebuffer, FramebufferInfo};
 use core::slice;
+use core::sync::atomic::AtomicBool;
 use limine::framebuffer::MemoryModel;
-use limine::request::{FramebufferRequest, HhdmRequest, MemoryMapRequest};
-use limine::request::{RequestsEndMarker, RequestsStartMarker};
+use limine::request::{
+    FramebufferRequest, HhdmRequest, MemoryMapRequest, RequestsEndMarker, RequestsStartMarker,
+};
 use limine::{BaseRevision, memory_map};
-use spin::Lazy;
 
 /// Marks one or more static Limine bootloader request items to be placed in the
 /// `.limine_requests` section of the binary.
@@ -40,9 +41,39 @@ limine_request! {
     static MMAP_REQUEST: MemoryMapRequest = MemoryMapRequest::new();
 }
 
-pub static HHDM_OFFSET: Lazy<usize> = Lazy::new(get_hhdm_offset);
+static mut HHDM_OFFSET: usize = 0;
 
-/// The initial memory map provided by the bootloader.
+pub fn init() {
+    assert!(BASE_REVISION.is_valid());
+    assert!(BASE_REVISION.is_supported());
+
+    init_hhdm_offset();
+}
+
+fn init_hhdm_offset() {
+    unsafe { HHDM_OFFSET = HHDM_REQUEST.get_response().unwrap().offset() as usize }
+}
+
+pub const fn hhdm_offset() -> usize {
+    unsafe { HHDM_OFFSET }
+}
+
+#[derive(Copy, Clone)]
+pub struct MemoryMap(&'static [&'static memory_map::Entry]);
+
+impl MemoryMap {
+    pub fn entries(&self) -> &'static [&'static memory_map::Entry] {
+        self.0
+    }
+
+    pub fn usable_entries(&self) -> impl DoubleEndedIterator<Item = &&'static memory_map::Entry> {
+        self.0
+            .iter()
+            .filter(|e| e.entry_type == memory_map::EntryType::USABLE)
+    }
+}
+
+/// Obtain the initial memory map provided by the bootloader.
 ///
 /// Limine guarantees:
 /// - Entries are sorted in increasing order of [`base`](memory_map::Entry::base) address.
@@ -53,33 +84,15 @@ pub static HHDM_OFFSET: Lazy<usize> = Lazy::new(get_hhdm_offset);
 ///     aligned to 4 KiB.
 /// - No alignment or overlap guarantees are made for other [`EntryType`](memory_map::EntryType)
 ///   variants
-pub static BOOT_MEMORY_MAP: Lazy<BootMemoryMap> = Lazy::new(get_memory_map);
-
-pub fn ensure_base_revision_support() {
-    assert!(BASE_REVISION.is_valid());
-    assert!(BASE_REVISION.is_supported());
-}
-
-fn get_hhdm_offset() -> usize {
-    HHDM_REQUEST.get_response().unwrap().offset() as usize
-}
-
-#[derive(Copy, Clone)]
-pub struct BootMemoryMap(&'static [&'static memory_map::Entry]);
-
-impl BootMemoryMap {
-    pub fn entries(&self) -> &'static [&'static memory_map::Entry] {
-        self.0
+pub fn acquire_memory_map() -> Option<MemoryMap> {
+    static MOVED: AtomicBool = AtomicBool::new(false);
+    if MOVED.load(core::sync::atomic::Ordering::Acquire) {
+        None
+    } else {
+        MOVED.store(true, core::sync::atomic::Ordering::Release);
+        let mmap_response = MMAP_REQUEST.get_response().unwrap();
+        Some(MemoryMap(mmap_response.entries()))
     }
-
-    pub fn usable_entries(&self) -> impl DoubleEndedIterator<Item = &&'static memory_map::Entry> {
-        self.0.iter().filter(|e| e.entry_type == memory_map::EntryType::USABLE)
-    }
-}
-
-pub fn get_memory_map() -> BootMemoryMap {
-    let mmap_response = MMAP_REQUEST.get_response().unwrap();
-    BootMemoryMap(mmap_response.entries())
 }
 
 pub fn get_framebuffer() -> Framebuffer {

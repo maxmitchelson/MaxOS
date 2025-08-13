@@ -3,7 +3,7 @@ use core::slice;
 
 use spin::Once;
 
-use crate::limine::{BOOT_MEMORY_MAP, BootMemoryMap};
+use crate::limine;
 use crate::memory::*;
 
 static ALLOCATOR_PTR: Once<AllocatorPtr> = Once::new();
@@ -17,7 +17,7 @@ unsafe impl Sync for AllocatorPtr {}
 pub fn init() {
     ALLOCATOR_PTR.call_once(|| {
         AllocatorPtr(UnsafeCell::new(
-            BuddyAllocator::new_embedded(*BOOT_MEMORY_MAP).unwrap(),
+            BuddyAllocator::new_embedded(limine::acquire_memory_map().unwrap()).unwrap(),
         ))
     });
 }
@@ -75,7 +75,7 @@ pub struct BuddyAllocator {
 }
 
 impl BuddyAllocator {
-    pub fn new_embedded(memory_map: BootMemoryMap) -> Result<Self, FrallocError> {
+    pub fn new_embedded(memory_map: limine::MemoryMap) -> Result<Self, FrallocError> {
         let (usable_start, usable_end) = Self::get_usable_region(memory_map)?;
 
         let length = (usable_end - usable_start).value();
@@ -104,7 +104,7 @@ impl BuddyAllocator {
     }
 
     fn get_usable_region(
-        memory_map: BootMemoryMap,
+        memory_map: limine::MemoryMap,
     ) -> Result<(PhysicalAddress, PhysicalAddress), FrallocError> {
         let mut usable = memory_map.usable_entries();
 
@@ -138,7 +138,7 @@ impl BuddyAllocator {
     ///
     /// Does not assume that all unusable memory is contained in the memory map and uses the holes
     /// between [`USABLE`](limine::memory_map::EntryType::USABLE) entries for safety.
-    fn set_reserved_from_mmap(&mut self, memory_map: BootMemoryMap) {
+    fn set_reserved_from_mmap(&mut self, memory_map: limine::MemoryMap) {
         let mut usable = memory_map.usable_entries();
 
         let first = usable.next().unwrap();
@@ -398,7 +398,9 @@ impl BuddyAllocator {
         let new_frame = self.allocate(PAGE_SIZE);
         crate::println!("Is same frame recieved: [{}]", new_frame == frame);
 
-        crate::println!("Freeing all allocated blocks (includes these not allocated by this test)");
+        crate::println!(
+            "Freeing all allocated blocks (includes blocks allocated outside this test)"
+        );
         let mut addr = self.region_start;
         for i in offset..offset + offset {
             if self.state(i) == BlockState::Allocated {

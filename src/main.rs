@@ -23,10 +23,10 @@ static TERMINAL: Lazy<TerminalDriver> =
 
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
-    limine::ensure_base_revision_support();
+    limine::init();
 
     println!("Hello MaxOS!");
-    println!("HHDM offset: {:#X}", *limine::HHDM_OFFSET);
+    println!("HHDM offset: {:#X}", limine::hhdm_offset());
 
     println!("Initializing frame allocator");
     frame_allocator::init();

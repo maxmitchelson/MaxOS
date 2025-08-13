@@ -29,12 +29,12 @@ impl PhysicalAddress {
 
     #[inline(always)]
     pub const fn from_u64(address: u64) -> Self {
-        Self (address as usize)
+        Self(address as usize)
     }
 
     #[inline(always)]
-    pub fn to_virtual(self) -> VirtualAddress {
-        VirtualAddress(*limine::HHDM_OFFSET + self.0)
+    pub const fn to_virtual(self) -> VirtualAddress {
+        VirtualAddress(limine::hhdm_offset() + self.0)
     }
 }
 
@@ -143,13 +143,13 @@ impl VirtualAddress {
     }
 
     #[inline(always)]
-    pub fn to_ptr<T>(self) -> *mut T {
+    pub const fn to_ptr<T>(self) -> *mut T {
         self.0 as *mut T
     }
 
     #[inline(always)]
-    pub unsafe fn to_physical(self) -> PhysicalAddress {
-        PhysicalAddress(self.0 - *limine::HHDM_OFFSET)
+    pub const unsafe fn to_physical(self) -> PhysicalAddress {
+        PhysicalAddress(self.0 - limine::hhdm_offset())
     }
 }
 
