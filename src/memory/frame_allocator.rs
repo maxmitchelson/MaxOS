@@ -258,29 +258,30 @@ impl BuddyAllocator {
             if current_order == order {
                 if self.state(current_block).is_free() {
                     return self.allocate_block(current_block, order);
-                } else if let Some(buddy) = Self::buddy(current_block) {
-                    if self.state(buddy).is_free() {
-                        return self.allocate_block(buddy, order);
-                    }
+                } else if let Some(buddy) = Self::buddy(current_block)
+                    && self.state(buddy).is_free()
+                {
+                    return self.allocate_block(buddy, order);
+                } else {
+                    // Should be caught earlier unless allocating order = 0
+                    panic!(
+                        "CRITICAL [FR0]: No free block for order size {order} in frame allocator"
+                    );
                 }
-
-                // Should be caught earlier unless allocating order = 0
-                panic!("CRITICAL [FR0]: No free block for order size {order} in frame allocator");
             }
 
             if self.state(current_block).is_usable() {
                 current_block <<= 1;
                 current_order += 1;
                 continue;
-            } else if let Some(buddy) = Self::buddy(current_block) {
-                if self.state(buddy).is_usable() {
-                    current_block = buddy << 1;
-                    current_order += 1;
-                    continue;
-                }
+            } else if let Some(buddy) = Self::buddy(current_block)
+                && self.state(buddy).is_usable()
+            {
+                current_block = buddy << 1;
+                current_order += 1;
+            } else {
+                panic!("CRITICAL [FR1]: No free block for order size {order} in frame allocator");
             }
-
-            panic!("CRITICAL [FR1]: No free block for order size {order} in frame allocator");
         }
     }
 
@@ -359,10 +360,11 @@ impl BuddyAllocator {
 
         for i in 0..count - 1 {
             let frame = self.allocate(PAGE_SIZE);
-            let frame =
-                unsafe { slice::from_raw_parts_mut(frame.to_virtual().to_ptr::<u8>(), PAGE_SIZE) };
-
-            frame.fill((i & 0xFF) as u8);
+            let frame = unsafe {
+                let ptr = frame.to_virtual().to_ptr::<u8>();
+                ptr.write_bytes((i & 0xFF) as u8, PAGE_SIZE);
+                slice::from_raw_parts_mut(ptr, PAGE_SIZE)
+            };
 
             if frame.iter().any(|&b| b != (i & 0xFF) as u8) {
                 println!("ERROR: invalid read/write for frame {}", i);
