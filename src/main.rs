@@ -13,7 +13,7 @@ use spin::{Lazy, RwLock};
 use terminal::TerminalDriver;
 
 use crate::framebuffer::Framebuffer;
-use crate::memory::frame_allocator::BuddyAllocator;
+use crate::memory::frame_allocator;
 use crate::terminal::Terminal;
 
 static FRAMEBUFFER: Lazy<RwLock<Framebuffer>> =
@@ -29,9 +29,9 @@ pub extern "C" fn _start() -> ! {
     println!("HHDM offset: {:#X}", *limine::HHDM_OFFSET);
 
     println!("Initializing frame allocator");
-    let mut frame_allocator = BuddyAllocator::new_embedded(*limine::BOOT_MEMORY_MAP).unwrap();
+    frame_allocator::init();
     println!("Allocating single frame");
-    let frame = frame_allocator.allocate(4096);
+    let frame = frame_allocator::allocate(4096);
     let frame = unsafe { &mut *frame.to_virtual().to_ptr::<[u8; 4096]>() };
 
     println!("Writing to allocated frame");
@@ -40,7 +40,7 @@ pub extern "C" fn _start() -> ! {
     }
 
     println!("Stress testing the frame allocator");
-    frame_allocator.stress();
+    frame_allocator::with_allocator(|a| a.stress());
 
     println!("Exit!");
     halt();

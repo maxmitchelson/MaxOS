@@ -1,12 +1,42 @@
+use core::cell::UnsafeCell;
 use core::slice;
 
-use crate::limine::BootMemoryMap;
+use spin::Once;
+
+use crate::limine::{BOOT_MEMORY_MAP, BootMemoryMap};
 use crate::memory::*;
 
-const PAGE_SIZE: usize = 4096;
-const PAGE_SIZE_ORDER: usize = 12;
+static ALLOCATOR_PTR: Once<AllocatorPtr> = Once::new();
 
-type MemoryRegion = (PhysicalAddress, PhysicalAddress);
+const PAGE_SIZE: usize = 4096;
+
+struct AllocatorPtr(UnsafeCell<BuddyAllocator>);
+unsafe impl Send for AllocatorPtr {}
+unsafe impl Sync for AllocatorPtr {}
+
+pub fn init() {
+    ALLOCATOR_PTR.call_once(|| {
+        AllocatorPtr(UnsafeCell::new(
+            BuddyAllocator::new_embedded(*BOOT_MEMORY_MAP).unwrap(),
+        ))
+    });
+}
+
+pub fn allocate(size: usize) -> PhysicalAddress {
+    with_allocator(|a| a.allocate(size))
+}
+
+pub fn free(address: PhysicalAddress) {
+    with_allocator(|a| a.free(address))
+}
+
+pub fn with_allocator<F, R>(func: F) -> R
+where
+    F: Fn(&mut BuddyAllocator) -> R,
+{
+    let buddy = ALLOCATOR_PTR.get().unwrap();
+    func(unsafe { &mut *buddy.0.get() })
+}
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +67,6 @@ pub enum FrallocError {
 }
 
 #[derive(Debug)]
-#[repr(align(4096))]
 pub struct BuddyAllocator {
     region_start: PhysicalAddress,
     region_end: PhysicalAddress,
@@ -74,7 +103,9 @@ impl BuddyAllocator {
         Ok(allocator)
     }
 
-    fn get_usable_region(memory_map: BootMemoryMap) -> Result<MemoryRegion, FrallocError> {
+    fn get_usable_region(
+        memory_map: BootMemoryMap,
+    ) -> Result<(PhysicalAddress, PhysicalAddress), FrallocError> {
         let mut usable = memory_map.usable_entries();
 
         let first = usable.next().ok_or(FrallocError::NoUsableMemory)?;
@@ -261,7 +292,7 @@ impl BuddyAllocator {
 
     #[inline]
     pub fn free(&mut self, address: PhysicalAddress) {
-        let val = (address - self.region_start).value() >> PAGE_SIZE_ORDER;
+        let val = (address - self.region_start).value() >> PAGE_SIZE.trailing_zeros();
 
         let rev_order = if val == 0 {
             self.max_order
@@ -296,7 +327,9 @@ impl BuddyAllocator {
     #[inline(always)]
     fn order_for_size(&self, size: usize) -> Option<u8> {
         if is_aligned(size, PAGE_SIZE) && is_power_of_two(size) {
-            return Some(self.max_order - (size >> PAGE_SIZE_ORDER).trailing_zeros() as u8);
+            return Some(
+                self.max_order - (size.trailing_zeros() - PAGE_SIZE.trailing_zeros()) as u8,
+            );
         }
         None
     }
@@ -304,7 +337,7 @@ impl BuddyAllocator {
     #[inline(always)]
     fn max_order_for_length(length: usize) -> u8 {
         let mut order = 0;
-        let mut block_factor = (length - 1) >> PAGE_SIZE_ORDER;
+        let mut block_factor = (length - 1) >> PAGE_SIZE.trailing_zeros();
 
         while block_factor != 0 {
             block_factor >>= 1;

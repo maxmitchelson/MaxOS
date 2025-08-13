@@ -77,7 +77,7 @@ impl BootMemoryMap {
     }
 }
 
-fn get_memory_map() -> BootMemoryMap {
+pub fn get_memory_map() -> BootMemoryMap {
     let mmap_response = MMAP_REQUEST.get_response().unwrap();
     BootMemoryMap(mmap_response.entries())
 }
