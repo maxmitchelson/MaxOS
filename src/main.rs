@@ -9,11 +9,11 @@ mod terminal;
 use core::arch::asm;
 use core::panic::PanicInfo;
 
-use memory::frame_allocator::BuddyAllocator;
 use spin::{Lazy, RwLock};
 use terminal::TerminalDriver;
 
 use crate::framebuffer::Framebuffer;
+use crate::memory::frame_allocator::BuddyAllocator;
 use crate::terminal::Terminal;
 
 static FRAMEBUFFER: Lazy<RwLock<Framebuffer>> =
@@ -28,8 +28,8 @@ pub extern "C" fn _start() -> ! {
     println!("Hello MaxOS!");
     println!("HHDM offset: {:#X}", *limine::HHDM_OFFSET);
 
-    let fralloc = unsafe { &mut *BuddyAllocator::new_embedded(*limine::BOOT_MEMORY_MAP).unwrap() };
-    let frame = fralloc.allocate(4096);
+    let mut frame_allocator = BuddyAllocator::new_embedded(*limine::BOOT_MEMORY_MAP).unwrap();
+    let frame = frame_allocator.allocate(4096);
     let frame = unsafe { &mut *frame.to_virtual().to_ptr::<[u8; 4096]>() };
 
     println!("test");
@@ -37,7 +37,7 @@ pub extern "C" fn _start() -> ! {
         *byte = 1;
     }
 
-    fralloc.stress();
+    frame_allocator.stress();
 
     println!("{}", frame.iter().map(|x| *x as u64).sum::<u64>());
 

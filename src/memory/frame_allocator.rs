@@ -46,37 +46,32 @@ pub struct BuddyAllocator {
 }
 
 impl BuddyAllocator {
-    pub fn new_embedded(memory_map: BootMemoryMap) -> Result<*mut Self, FrallocError> {
-        let (region_start, region_end) = Self::get_usable_region(memory_map)?;
+    pub fn new_embedded(memory_map: BootMemoryMap) -> Result<Self, FrallocError> {
+        let (usable_start, usable_end) = Self::get_usable_region(memory_map)?;
 
-        let length = (region_end - region_start).value();
+        let length = (usable_end - usable_start).value();
         let max_order = Self::max_order_for_length(length);
         let tree_size = Self::size_of_tree_for_order(max_order);
-        let allocator_size = align_up(tree_size + size_of::<BuddyAllocator>(), PAGE_SIZE);
 
-        let mut possible_allocator_pos = memory_map
+        let mut possible_tree_pos = memory_map
             .usable_entries()
-            .filter(|e| e.length as usize >= allocator_size);
+            .filter(|e| e.length as usize >= tree_size);
 
-        let allocator_start = match possible_allocator_pos.next() {
+        let tree_start = match possible_tree_pos.next() {
             Some(region) => PhysicalAddress::from_u64(region.base),
             None => return Err(FrallocError::NotEnoughAvailableMemory),
         };
 
-        let allocator = unsafe {
-            &mut *Self::init(
-                allocator_start,
-                align_up(allocator_start + allocator_size, PAGE_SIZE),
-                region_end,
-                max_order,
-                allocator_size,
-                tree_size,
-            )
+        let block_tree = unsafe { Self::init_block_tree(tree_start, tree_size) };
+        let mut allocator = Self {
+            region_start: align_up(tree_start + tree_size, PAGE_SIZE),
+            region_end: usable_end,
+            max_order,
+            block_tree,
         };
 
         allocator.set_reserved_from_mmap(memory_map);
-
-        Ok(allocator as *mut Self)
+        Ok(allocator)
     }
 
     fn get_usable_region(memory_map: BootMemoryMap) -> Result<MemoryRegion, FrallocError> {
@@ -92,38 +87,18 @@ impl BuddyAllocator {
     }
 
     #[inline]
-    unsafe fn init(
-        allocator_start: PhysicalAddress,
-        region_start: PhysicalAddress,
-        region_end: PhysicalAddress,
-        max_order: u8,
-        allocator_size: usize,
-        tree_size: usize,
-    ) -> *mut Self {
+    unsafe fn init_block_tree(tree_start: PhysicalAddress, tree_size: usize) -> *mut [BlockState] {
         unsafe {
-            let allocator_space = slice::from_raw_parts_mut(
-                allocator_start.to_virtual().to_ptr::<u8>(),
-                allocator_size,
-            );
-            allocator_space.fill(0);
-
-            let allocator = allocator_start.to_virtual().to_ptr::<BuddyAllocator>();
-            let tree = slice::from_raw_parts_mut(
-                (allocator_start + size_of::<BuddyAllocator>())
-                    .to_virtual()
-                    .to_ptr::<BlockState>(),
+            let block_tree = slice::from_raw_parts_mut(
+                tree_start.to_virtual().to_ptr::<BlockState>(),
                 tree_size,
             );
 
-            tree.fill(BlockState::Free);
-            tree[0] = BlockState::Reserved;
-
-            (*allocator).region_start = region_start;
-            (*allocator).region_end = region_end;
-            (*allocator).max_order = max_order;
-            (*allocator).block_tree = tree;
-
-            allocator
+            block_tree
+                .as_mut_ptr()
+                .write_bytes(BlockState::Free as u8, tree_size);
+            block_tree[0] = BlockState::Reserved;
+            block_tree
         }
     }
 
@@ -132,7 +107,7 @@ impl BuddyAllocator {
     ///
     /// Does not assume that all unusable memory is contained in the memory map and uses the holes
     /// between [`USABLE`](limine::memory_map::EntryType::USABLE) entries for safety.
-    pub fn set_reserved_from_mmap(&mut self, memory_map: BootMemoryMap) {
+    fn set_reserved_from_mmap(&mut self, memory_map: BootMemoryMap) {
         let mut usable = memory_map.usable_entries();
 
         let first = usable.next().unwrap();
@@ -149,7 +124,7 @@ impl BuddyAllocator {
 
     #[inline(always)]
     fn clamp_addr(&self, address: PhysicalAddress) -> PhysicalAddress {
-        return address.clamp(self.region_start, self.region_end);
+        address.clamp(self.region_start, self.region_end)
     }
 
     #[inline]
@@ -244,7 +219,7 @@ impl BuddyAllocator {
     }
 
     #[inline]
-    pub fn allocate_block(&mut self, block: usize, order: u8) -> PhysicalAddress {
+    fn allocate_block(&mut self, block: usize, order: u8) -> PhysicalAddress {
         self.set_state(block, BlockState::Allocated);
         self.update_ancestors(block);
         self.region_start + self.size_for_order(order) * (block - (1 << order))
@@ -273,7 +248,6 @@ impl BuddyAllocator {
             if self.state(current_block).is_usable() {
                 current_block <<= 1;
                 current_order += 1;
-                continue;
             } else if let Some(buddy) = Self::buddy(current_block)
                 && self.state(buddy).is_usable()
             {
