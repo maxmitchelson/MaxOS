@@ -165,7 +165,7 @@ bitflags::bitflags! {
     }
 }
 
-pub fn get_active_level_4_table(offset: usize) -> &'static mut PageTable {
+pub fn get_active_level_4_table() -> &'static mut PageTable {
     let (physical, _) = cpu::registers::Cr3::read();
     let page_table_ptr = physical.to_virtual().to_ptr::<PageTable>();
 

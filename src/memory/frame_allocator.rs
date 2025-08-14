@@ -34,7 +34,9 @@ pub fn with_allocator<F, R>(func: F) -> R
 where
     F: Fn(&mut BuddyAllocator) -> R,
 {
-    let buddy = ALLOCATOR_PTR.get().unwrap();
+    let buddy = ALLOCATOR_PTR
+        .get()
+        .expect("CRITICAL [FR4]: Cannot opperate on uninitialized frame allocator");
     func(unsafe { &mut *buddy.0.get() })
 }
 
