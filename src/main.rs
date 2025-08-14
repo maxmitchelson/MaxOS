@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt)]
 
+mod cpu;
 mod framebuffer;
 mod limine;
 mod memory;
@@ -24,9 +26,14 @@ static TERMINAL: Lazy<TerminalDriver> =
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     limine::init();
+    cpu::interrupts::init();
 
     println!("Hello MaxOS!");
     println!("HHDM offset: {:#X}", limine::hhdm_offset());
+
+    unsafe {
+        asm!("int 0");
+    };
 
     println!("Initializing frame allocator");
     frame_allocator::init();
