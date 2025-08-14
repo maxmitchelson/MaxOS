@@ -4,6 +4,8 @@ use core::{
     ops::{Index, IndexMut},
 };
 
+use crate::cpu;
+
 use super::PhysicalAddress;
 
 /// A 64-bit page table.
@@ -164,16 +166,8 @@ bitflags::bitflags! {
 }
 
 pub fn get_active_level_4_table(offset: usize) -> &'static mut PageTable {
-    const CR3_ADDRESS_MASK: usize = 0x000F_FFFF_FFFF_F000;
-
-    let physical_address = {
-        let cr3_content: usize;
-        unsafe { asm!("mov {}, cr3", out(reg) cr3_content) }
-        cr3_content & CR3_ADDRESS_MASK
-    };
-
-    let virtual_address = physical_address + offset;
-    let page_table_ptr = virtual_address as *mut PageTable;
+    let (physical, _) = cpu::registers::Cr3::read();
+    let page_table_ptr = physical.to_virtual().to_ptr::<PageTable>();
 
     unsafe { &mut *page_table_ptr }
 }

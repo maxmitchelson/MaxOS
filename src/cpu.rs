@@ -1,5 +1,6 @@
 pub mod interrupts;
 pub mod segments;
+pub mod registers;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
