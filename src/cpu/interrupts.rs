@@ -4,7 +4,13 @@ mod interrupt_routines;
 use interrupt_descriptor_table::InterruptDescriptorTable;
 use interrupt_routines::*;
 
-use crate::{cpu::{registers::RFlags, segments::SegmentSelector}, memory::VirtualAddress};
+use crate::{
+    cpu::{
+        PrivilegeLevel, interrupts::interrupt_descriptor_table::GateType, registers::RFlags,
+        segments::SegmentSelector,
+    },
+    memory::VirtualAddress,
+};
 
 static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
@@ -27,10 +33,24 @@ pub fn init() {
     let mut idt = InterruptDescriptorTable::new();
 
     idt.divide_error.set_handler(divide_error_handler);
+
+    idt.debug
+        .set_handler(debug_handler)
+        .set_gate_type(GateType::Trap);
+
     idt.non_maskable_interrupt.set_handler(non_maskable_interrupt_handler);
-    idt.breakpoint.set_handler(breakpoint_handler);
-    idt.overflow.set_handler(overflow_handler);
-    idt.bound_range_exceeded.set_handler(overflow_handler);
+
+    idt.breakpoint
+        .set_handler(breakpoint_handler)
+        .set_gate_type(GateType::Trap)
+        .set_privilege_level(PrivilegeLevel::Ring3);
+
+    idt.overflow
+        .set_handler(overflow_handler)
+        .set_gate_type(GateType::Trap)
+        .set_privilege_level(PrivilegeLevel::Ring3);
+
+    idt.bound_range_exceeded.set_handler(bound_range_exceeded_handler);
     idt.invalid_opcode.set_handler(invalid_opcode_handler);
     idt.device_not_available.set_handler(device_not_available_handler);
     idt.double_fault.set_handler(double_fault_handler);
@@ -41,7 +61,11 @@ pub fn init() {
     idt.general_protection_fault.set_handler(general_protection_fault_handler);
     idt.page_fault.set_handler(page_fault_handler);
     idt.x87_floating_point_exception.set_handler(x87_floating_point_exception_handler);
-    idt.alignment_check.set_handler(alignement_check_handler);
+
+    idt.alignment_check
+        .set_handler(alignement_check_handler)
+        .set_privilege_level(PrivilegeLevel::Ring3);
+
     idt.machine_check.set_handler(machine_check_handler);
     idt.simd_floating_point.set_handler(simd_floating_point_handler);
     idt.virtualization_exception.set_handler(virtualization_exception_handler);

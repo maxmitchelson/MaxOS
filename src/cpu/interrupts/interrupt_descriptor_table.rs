@@ -185,17 +185,6 @@ pub(super) struct Attributes {
 }
 
 impl Attributes {
-    pub(super) const fn new() -> Self {
-        Self {
-            interrupt_stack_table: 0,
-            attributes: Self::attributes_from(
-                Presence::Present,
-                PrivilegeLevel::Ring0,
-                GateType::Interrupt,
-            ),
-        }
-    }
-
     pub(super) const fn missing() -> Self {
         Self {
             interrupt_stack_table: 0,
@@ -222,20 +211,24 @@ impl Attributes {
         presence as u8 | ((privilege_level as u8) << 5) | gate_type as u8
     }
 
-    pub(super) fn set_present(&mut self) {
+    pub(super) fn set_present(&mut self) -> &mut Self {
         self.attributes |= Presence::Present as u8;
+        self
     }
 
-    pub(super) fn set_absent(&mut self) {
+    pub(super) fn set_absent(&mut self) -> &mut Self{
         self.attributes &= !(Presence::Present as u8);
+        self
     }
 
-    pub(super) fn set_privilege_level(&mut self, privilege_level: PrivilegeLevel) {
+    pub(super) fn set_privilege_level(&mut self, privilege_level: PrivilegeLevel) -> &mut Self {
         self.attributes = self.attributes & 0b1000_1111 | ((privilege_level as u8) << 5);
+        self
     }
 
-    pub(super) fn set_gate_type(&mut self, gate_type: GateType) {
+    pub(super) fn set_gate_type(&mut self, gate_type: GateType) -> &mut Self {
         self.attributes = self.attributes & 0b1110_0000 | gate_type as u8;
+        self
     }
 
     pub(super) fn status(&self) -> Presence {
