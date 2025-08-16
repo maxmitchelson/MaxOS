@@ -12,6 +12,7 @@ pub mod selectors {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[allow(clippy::upper_case_acronyms)]
 pub enum DescriptorTable {
     GDT = 0,
     LDT = 1,

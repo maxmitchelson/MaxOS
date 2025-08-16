@@ -1,9 +1,6 @@
 use crate::limine;
-use core::{
-    fmt,
-    ops::{Add, AddAssign, Sub, SubAssign},
-    usize,
-};
+use core::fmt;
+use core::ops::{Add, AddAssign, Sub, SubAssign};
 
 #[derive(PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -170,7 +167,7 @@ impl VirtualAddress {
         let last_bit_set = value & 1 << 47 != 0;
         match last_bit_set {
             true => 0xFFFF << 48 | value,
-            false => !(0xFFFF << 48) & value
+            false => !(0xFFFF << 48) & value,
         }
     }
 
