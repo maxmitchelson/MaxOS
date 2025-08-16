@@ -1,6 +1,5 @@
 use core::{
-    arch::asm,
-    fmt::{self},
+    fmt,
     ops::{Index, IndexMut},
 };
 
