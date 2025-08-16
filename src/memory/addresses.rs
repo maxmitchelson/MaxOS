@@ -2,6 +2,7 @@ use crate::limine;
 use core::{
     fmt,
     ops::{Add, AddAssign, Sub, SubAssign},
+    usize,
 };
 
 #[derive(PartialEq, Eq, Clone, Copy, PartialOrd, Ord)]
@@ -55,12 +56,14 @@ impl From<usize> for PhysicalAddress {
 impl Sub<usize> for PhysicalAddress {
     type Output = PhysicalAddress;
 
+    #[inline(always)]
     fn sub(self, rhs: usize) -> Self::Output {
         Self(self.0 - rhs)
     }
 }
 
 impl SubAssign<usize> for PhysicalAddress {
+    #[inline(always)]
     fn sub_assign(&mut self, rhs: usize) {
         self.0 -= rhs;
     }
@@ -69,12 +72,14 @@ impl SubAssign<usize> for PhysicalAddress {
 impl Add<usize> for PhysicalAddress {
     type Output = PhysicalAddress;
 
+    #[inline(always)]
     fn add(self, rhs: usize) -> Self::Output {
         Self(self.0 + rhs)
     }
 }
 
 impl AddAssign<usize> for PhysicalAddress {
+    #[inline(always)]
     fn add_assign(&mut self, rhs: usize) {
         self.0 += rhs;
     }
@@ -83,12 +88,14 @@ impl AddAssign<usize> for PhysicalAddress {
 impl Sub for PhysicalAddress {
     type Output = PhysicalAddress;
 
+    #[inline(always)]
     fn sub(self, rhs: Self) -> Self::Output {
         Self(self.0 - rhs.0)
     }
 }
 
 impl SubAssign for PhysicalAddress {
+    #[inline(always)]
     fn sub_assign(&mut self, rhs: Self) {
         self.0 -= rhs.0
     }
@@ -97,12 +104,14 @@ impl SubAssign for PhysicalAddress {
 impl Add for PhysicalAddress {
     type Output = PhysicalAddress;
 
+    #[inline(always)]
     fn add(self, rhs: Self) -> Self::Output {
         Self(self.0 + rhs.0)
     }
 }
 
 impl AddAssign for PhysicalAddress {
+    #[inline(always)]
     fn add_assign(&mut self, rhs: Self) {
         self.0 += rhs.0;
     }
@@ -129,7 +138,40 @@ impl VirtualAddress {
 
     #[inline(always)]
     pub const fn from(address: usize) -> Self {
+        let val = Self(address);
+        assert!(val.is_canonical());
+        val
+    }
+
+    /// SAFETY: The `addresss` should be a valid, canonical, virtual address.
+    /// if necessary, use [`VirtualAddress::sign_extend_value`] to ensure canonical form.
+    #[inline(always)]
+    pub const unsafe fn from_unchecked(address: usize) -> Self {
         Self(address)
+    }
+
+    #[inline(always)]
+    pub const fn is_canonical(&self) -> bool {
+        let last_bit_set = self.0 & 1 << 47 != 0;
+        match self.sign_extension() {
+            0xFFFF => last_bit_set,
+            0x0000 => !last_bit_set,
+            _ => false,
+        }
+    }
+
+    #[inline(always)]
+    pub const fn sign_extension(&self) -> u16 {
+        (self.0 >> 48) as u16
+    }
+
+    #[inline]
+    pub const fn sign_extend_value(value: usize) -> usize {
+        let last_bit_set = value & 1 << 47 != 0;
+        match last_bit_set {
+            true => 0xFFFF << 48 | value,
+            false => !(0xFFFF << 48) & value
+        }
     }
 
     #[inline(always)]
@@ -163,7 +205,7 @@ impl From<VirtualAddress> for usize {
 impl From<usize> for VirtualAddress {
     #[inline(always)]
     fn from(value: usize) -> Self {
-        Self(value)
+        Self::from(value)
     }
 }
 
@@ -184,56 +226,68 @@ impl<T> From<*mut T> for VirtualAddress {
 impl Sub<usize> for VirtualAddress {
     type Output = VirtualAddress;
 
+    #[inline(always)]
     fn sub(self, rhs: usize) -> Self::Output {
-        Self(self.0 - rhs)
+        Self::from(self.0 - rhs)
     }
 }
 
 impl SubAssign<usize> for VirtualAddress {
+    #[inline(always)]
     fn sub_assign(&mut self, rhs: usize) {
         self.0 -= rhs;
+        assert!(self.is_canonical());
     }
 }
 
 impl Add<usize> for VirtualAddress {
     type Output = VirtualAddress;
 
+    #[inline(always)]
     fn add(self, rhs: usize) -> Self::Output {
-        Self(self.0 + rhs)
+        Self::from(self.0 + rhs)
     }
 }
 
 impl AddAssign<usize> for VirtualAddress {
+    #[inline(always)]
     fn add_assign(&mut self, rhs: usize) {
         self.0 += rhs;
+        assert!(self.is_canonical())
     }
 }
 
 impl Sub for VirtualAddress {
     type Output = VirtualAddress;
 
+    #[inline(always)]
     fn sub(self, rhs: Self) -> Self::Output {
-        Self(self.0 - rhs.0)
+        Self::from(self.0 - rhs.0)
     }
 }
 
 impl SubAssign for VirtualAddress {
+    #[inline(always)]
     fn sub_assign(&mut self, rhs: Self) {
-        self.0 -= rhs.0
+        self.0 -= rhs.0;
+        assert!(self.is_canonical());
     }
 }
 
 impl Add for VirtualAddress {
     type Output = VirtualAddress;
 
+    #[inline(always)]
     fn add(self, rhs: Self) -> Self::Output {
-        Self(self.0 + rhs.0)
+        Self::from(self.0 + rhs.0)
     }
 }
 
 impl AddAssign for VirtualAddress {
+    #[inline(always)]
     fn add_assign(&mut self, rhs: Self) {
         self.0 += rhs.0;
+        assert!(self.is_canonical());
     }
 }
 
