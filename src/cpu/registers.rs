@@ -70,6 +70,8 @@ bitflags::bitflags! {
 
 impl fmt::Debug for RFlags {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        bitflags::parser::to_writer_strict(self, f)
+        write!(f, "RFlags(")?;
+        bitflags::parser::to_writer_strict(self, &mut *f)?;
+        write!(f, ")")
     }
 }

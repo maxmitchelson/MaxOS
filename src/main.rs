@@ -35,6 +35,40 @@ pub extern "C" fn _start() -> ! {
         asm!("int 0");
     };
 
+    // Terrible testing code, this behavior should be made much MUCH easier
+    // let pt = memory::paging::get_active_level_4_table();
+    //
+    // 'out: for (i, third) in pt.entries_mut().enumerate() {
+    //     if third.is_unused() {
+    //         continue;
+    //     }
+    //     let third = unsafe { &mut *third.address().to_virtual().to_ptr::<PageTable>() };
+    //     for (j, second) in third.entries_mut().enumerate() {
+    //         if second.is_unused() {
+    //             continue;
+    //         }
+    //         let second = unsafe { &mut *second.address().to_virtual().to_ptr::<PageTable>() };
+    //         for (k, first) in second.entries_mut().enumerate() {
+    //             if first.is_unused() {
+    //                 continue;
+    //             }
+    //             let first = unsafe { &mut *first.address().to_virtual().to_ptr::<PageTable>() };
+    //             for (l, page_table) in first.entries_mut().enumerate() {
+    //                 if page_table.is_unused() {
+    //                     page_table.set_flags(PageTableEntryFlags::PRESENT);
+    //                     let addr = VirtualAddress::from(VirtualAddress::sign_extend_value(
+    //                         i << 39 | j << 30 | k << 21 | l << 12,
+    //                     ));
+    //                     let x = unsafe { &mut *addr.to_ptr::<u8>() };
+    //                     *x = 5;
+    //                     println!("out");
+    //                     break 'out;
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
+
     println!("Initializing frame allocator");
     frame_allocator::init();
     println!("Allocating single frame");

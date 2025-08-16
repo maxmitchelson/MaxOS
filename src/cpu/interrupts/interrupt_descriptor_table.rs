@@ -2,44 +2,41 @@ use core::arch::asm;
 use core::fmt::Debug;
 use core::marker::PhantomData;
 
-use crate::cpu::PrivilegeLevel;
-use crate::cpu::interrupts::{Isr, IsrWithError};
+use crate::cpu::interrupts::{
+    DivergingHandler, DivergingHandlerWithError, Handler, HandlerWithError, PageFaultError,
+    SegmentSelectorError,
+};
 use crate::cpu::segments;
+use crate::cpu::{DescriptorTablePointer, PrivilegeLevel};
 use crate::memory::VirtualAddress;
-
-#[repr(C, packed)]
-struct DescriptorTablePointer {
-    limit: u16,
-    base: VirtualAddress,
-}
 
 #[repr(C)]
 #[derive(Debug)]
 pub(super) struct InterruptDescriptorTable {
-    pub(super) divide_error: Descriptor<Isr>,
-    pub(super) debug: Descriptor<Isr>,
-    pub(super) non_maskable_interrupt: Descriptor<Isr>,
-    pub(super) breakpoint: Descriptor<Isr>,
-    pub(super) overflow: Descriptor<Isr>,
-    pub(super) bound_range_exceeded: Descriptor<Isr>,
-    pub(super) invalid_opcode: Descriptor<Isr>,
-    pub(super) device_not_available: Descriptor<Isr>,
-    pub(super) double_fault: Descriptor<IsrWithError /*AbortISRWithError*/>,
-    pub(super) coprocessor_segment_overrun: Descriptor<Isr>,
-    pub(super) invalid_tss: Descriptor<IsrWithError>,
-    pub(super) segment_not_present: Descriptor<IsrWithError>,
-    pub(super) stack_segment_fault: Descriptor<IsrWithError>,
-    pub(super) general_protection_fault: Descriptor<IsrWithError>,
-    pub(super) page_fault: Descriptor<IsrWithError>,
+    pub(super) divide_error: Descriptor<Handler>,
+    pub(super) debug: Descriptor<Handler>,
+    pub(super) non_maskable_interrupt: Descriptor<Handler>,
+    pub(super) breakpoint: Descriptor<Handler>,
+    pub(super) overflow: Descriptor<Handler>,
+    pub(super) bound_range_exceeded: Descriptor<Handler>,
+    pub(super) invalid_opcode: Descriptor<Handler>,
+    pub(super) device_not_available: Descriptor<Handler>,
+    pub(super) double_fault: Descriptor<DivergingHandlerWithError<usize>>,
+    _coprocessor_segment_overrun: Reserved,
+    pub(super) invalid_tss: Descriptor<HandlerWithError<SegmentSelectorError>>,
+    pub(super) segment_not_present: Descriptor<HandlerWithError<SegmentSelectorError>>,
+    pub(super) stack_segment_fault: Descriptor<HandlerWithError<SegmentSelectorError>>,
+    pub(super) general_protection_fault: Descriptor<HandlerWithError<SegmentSelectorError>>,
+    pub(super) page_fault: Descriptor<HandlerWithError<PageFaultError>>,
     _reserved_0: Reserved,
-    pub(super) x87_floating_point_exception: Descriptor<Isr>,
-    pub(super) alignment_check: Descriptor<IsrWithError>,
-    pub(super) machine_check: Descriptor<Isr /* AbortISR */>,
-    pub(super) simd_floating_point: Descriptor<Isr>,
-    pub(super) virtualization_exception: Descriptor<Isr>,
-    pub(super) control_protection_exception: Descriptor<IsrWithError>,
+    pub(super) x87_floating_point_exception: Descriptor<Handler>,
+    pub(super) alignment_check: Descriptor<HandlerWithError<usize>>,
+    pub(super) machine_check: Descriptor<DivergingHandler>,
+    pub(super) simd_floating_point: Descriptor<Handler>,
+    pub(super) virtualization_exception: Descriptor<Handler>,
+    pub(super) control_protection_exception: Descriptor<HandlerWithError<usize>>,
     _reserved_10: [Reserved; 10],
-    pub(super) _available: [Descriptor<Isr>; 256 - 32],
+    pub(super) _available: [Descriptor<Handler>; 256 - 32],
 }
 
 impl InterruptDescriptorTable {
@@ -54,7 +51,7 @@ impl InterruptDescriptorTable {
             invalid_opcode: Descriptor::missing(),
             device_not_available: Descriptor::missing(),
             double_fault: Descriptor::missing(),
-            coprocessor_segment_overrun: Descriptor::missing(),
+            _coprocessor_segment_overrun: Reserved::new(),
             invalid_tss: Descriptor::missing(),
             segment_not_present: Descriptor::missing(),
             stack_segment_fault: Descriptor::missing(),
@@ -72,6 +69,7 @@ impl InterruptDescriptorTable {
         }
     }
 
+    /// SAFETY: Callers must ensure that the provided pointer is valid as long as the table is loaded
     pub(super) unsafe fn load(table: *const Self) {
         let idt_ptr = &DescriptorTablePointer {
             limit: (size_of::<Self>() - 1) as u16,
@@ -136,19 +134,34 @@ impl<T> Descriptor<T> {
     }
 }
 
-macro_rules! impl_set_handler {
-    ($h:ty) => {
-        impl Descriptor<$h> {
-            #[inline]
-            pub(super) fn set_handler(&mut self, handler: $h) -> &mut Attributes {
-                self.set_handler_address(handler as usize)
-            }
-        }
-    };
+impl Descriptor<Handler> {
+    #[inline]
+    pub(super) fn set_handler(&mut self, handler: Handler) -> &mut Attributes {
+        self.set_handler_address(handler as usize)
+    }
 }
 
-impl_set_handler!(Isr);
-impl_set_handler!(IsrWithError);
+impl<T> Descriptor<HandlerWithError<T>> {
+    #[inline]
+    pub(super) fn set_handler(&mut self, handler: HandlerWithError<T>) -> &mut Attributes {
+        self.set_handler_address(handler as usize)
+    }
+}
+
+impl Descriptor<DivergingHandler> {
+    #[inline]
+    pub(super) fn set_handler(&mut self, handler: DivergingHandler) -> &mut Attributes {
+        self.set_handler_address(handler as usize)
+    }
+}
+
+impl<T> Descriptor<DivergingHandlerWithError<T>> {
+    #[inline]
+    pub(super) fn set_handler(&mut self, handler: DivergingHandlerWithError<T>) -> &mut Attributes {
+        self.set_handler_address(handler as usize)
+    }
+}
+
 // impl_set_handler!(AbortISR);
 // impl_set_handler!(AbortISRWithError);
 
@@ -170,11 +183,35 @@ pub(super) enum GateType {
     Trap = 0x0F,
 }
 
+impl TryFrom<u8> for GateType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x0E => Ok(Self::Interrupt),
+            0x0F => Ok(Self::Trap),
+            _ => Err(()),
+        }
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug)]
 pub(super) enum Presence {
-    Present = 0x80,
-    Missing = 0x00,
+    Missing = 0,
+    Present = 1,
+}
+
+impl TryFrom<u8> for Presence {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Missing),
+            1 => Ok(Self::Present),
+            _ => Err(()),
+        }
+    }
 }
 
 #[repr(C)]
@@ -208,52 +245,39 @@ impl Attributes {
         privilege_level: PrivilegeLevel,
         gate_type: GateType,
     ) -> u8 {
-        presence as u8 | ((privilege_level as u8) << 5) | gate_type as u8
+        ((presence as u8) << 7) | ((privilege_level as u8) << 5) | gate_type as u8
     }
 
     pub(super) fn set_present(&mut self) -> &mut Self {
-        self.attributes |= Presence::Present as u8;
+        self.attributes |= (Presence::Present as u8) << 7;
         self
     }
 
-    pub(super) fn set_absent(&mut self) -> &mut Self{
-        self.attributes &= !(Presence::Present as u8);
+    pub(super) fn set_missing(&mut self) -> &mut Self {
+        self.attributes &= (Presence::Missing as u8) << 7;
         self
     }
 
     pub(super) fn set_privilege_level(&mut self, privilege_level: PrivilegeLevel) -> &mut Self {
-        self.attributes = self.attributes & 0b1000_1111 | ((privilege_level as u8) << 5);
+        self.attributes = (self.attributes & !(0b11 << 5)) | ((privilege_level as u8) << 5);
         self
     }
 
     pub(super) fn set_gate_type(&mut self, gate_type: GateType) -> &mut Self {
-        self.attributes = self.attributes & 0b1110_0000 | gate_type as u8;
+        self.attributes = (self.attributes & !(0b1111)) | gate_type as u8;
         self
     }
 
     pub(super) fn status(&self) -> Presence {
-        match (self.attributes & 0x80) == 0x80 {
-            true => Presence::Present,
-            false => Presence::Missing,
-        }
+        (self.attributes >> 7).try_into().unwrap()
     }
 
     pub(super) fn privilege_level(&self) -> PrivilegeLevel {
-        match (self.attributes >> 5) & 0b11 {
-            0 => PrivilegeLevel::Ring0,
-            1 => PrivilegeLevel::Ring1,
-            2 => PrivilegeLevel::Ring2,
-            3 => PrivilegeLevel::Ring3,
-            _ => panic!("Invalid privilege level"),
-        }
+        ((self.attributes >> 5) & 0b11).try_into().unwrap()
     }
 
     pub(super) fn gate_type(&self) -> GateType {
-        match self.attributes & 0b1111 {
-            0xE => GateType::Interrupt,
-            0xF => GateType::Trap,
-            _ => panic!("Invalid gate type"),
-        }
+        (self.attributes & 0b1111).try_into().unwrap()
     }
 }
 
