@@ -1,5 +1,6 @@
-use crate::cpu::interrupts::{
-    InterruptStackFrame as ISF, PageFaultError, SegmentSelectorError as SSErr,
+use crate::{
+    cpu::interrupts::{InterruptStackFrame as ISF, PageFaultError, SegmentSelectorError as SSErr},
+    terminal::logger,
 };
 
 pub(super) extern "x86-interrupt" fn divide_error_handler(stack_frame: ISF) {
@@ -7,7 +8,7 @@ pub(super) extern "x86-interrupt" fn divide_error_handler(stack_frame: ISF) {
 }
 
 pub(super) extern "x86-interrupt" fn debug_handler(stack_frame: ISF) {
-    crate::println!("DEBUG TRAP stack_frame: {:#?}", stack_frame);
+    logger::warning!("DEBUG TRAP stack_frame: {:#?}", stack_frame);
 }
 
 pub(super) extern "x86-interrupt" fn non_maskable_interrupt_handler(stack_frame: ISF) {
@@ -15,11 +16,11 @@ pub(super) extern "x86-interrupt" fn non_maskable_interrupt_handler(stack_frame:
 }
 
 pub(super) extern "x86-interrupt" fn breakpoint_handler(stack_frame: ISF) {
-    crate::println!("BREAKPOINT TRAP stack_frame: {:#?}", stack_frame);
+    logger::warning!("BREAKPOINT TRAP stack_frame: {:#?}", stack_frame);
 }
 
 pub(super) extern "x86-interrupt" fn overflow_handler(stack_frame: ISF) {
-    crate::println!("OVERFLOW TRAP stack_frame: {:#?}", stack_frame);
+    logger::warning!("OVERFLOW TRAP stack_frame: {:#?}", stack_frame);
 }
 
 pub(super) extern "x86-interrupt" fn bound_range_exceeded_handler(stack_frame: ISF) {

@@ -5,6 +5,7 @@ use spin::Once;
 
 use crate::limine;
 use crate::memory::*;
+use crate::terminal::logger;
 
 static ALLOCATOR_PTR: Once<AllocatorPtr> = Once::new();
 
@@ -365,12 +366,12 @@ impl BuddyAllocator {
             }
         }
 
-        crate::println!(
+        logger::debug!(
             "Initial free {}KiB block count: {}",
             PAGE_SIZE / 1024,
             count
         );
-        crate::println!("Allocating all blocks");
+        logger::debug!("Allocating all blocks");
         for i in 0..count - 1 {
             let frame = self.allocate(PAGE_SIZE);
             let frame = unsafe {
@@ -380,7 +381,7 @@ impl BuddyAllocator {
             };
 
             if frame.iter().any(|&b| b != (i & 0xFF) as u8) {
-                crate::println!("ERROR: invalid read/write for frame {}", i);
+                logger::error!("invalid read/write for frame {}", i);
             }
         }
 
@@ -393,14 +394,18 @@ impl BuddyAllocator {
             }
         }
 
-        crate::println!("Allocator fill success status: [{}]", count == 0);
-        crate::println!("Address for last allocated frame: {:?}", frame);
-        crate::println!("Freeing and reallocating last allocated frame");
+        logger::debug!("Allocator fill success status: [{}]", count == 0);
+        logger::debug!("Address for last allocated frame: {:?}", frame);
+        logger::debug!("Freeing and reallocating last allocated frame");
         self.free(frame);
         let new_frame = self.allocate(PAGE_SIZE);
-        crate::println!("Is same frame recieved: [{}]", new_frame == frame);
+        if new_frame == frame {
+            logger::debug!("Same frame recieved");
+        } else {
+            logger::error!("Different frame received");
+        }
 
-        crate::println!(
+        logger::debug!(
             "Freeing all allocated blocks (includes blocks allocated outside this test)"
         );
         let mut addr = self.region_start;
@@ -412,6 +417,6 @@ impl BuddyAllocator {
             addr += PAGE_SIZE;
         }
 
-        crate::println!("Freed all possible blocks")
+        logger::debug!("Freed all possible blocks")
     }
 }
