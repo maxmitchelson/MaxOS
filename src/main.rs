@@ -11,6 +11,9 @@ mod terminal;
 use core::arch::asm;
 use core::panic::PanicInfo;
 
+use crate::terminal::{LogLevel, Logger};
+pub static LOGGER: Logger = Logger::new(LogLevel::Debug);
+
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     limine::init();
@@ -21,6 +24,13 @@ pub extern "C" fn _start() -> ! {
 
     println!("Hello MaxOS!");
     println!("HHDM offset: {:#X}", limine::hhdm_offset());
+
+    LOGGER.debug("Debug messsage");
+    LOGGER.info("Info message");
+    LOGGER.warn("Warning message");
+    LOGGER.error("Error messaage");
+    LOGGER.critical("Critical messaage");
+
     println!("Exit!");
 
     // unsafe {
