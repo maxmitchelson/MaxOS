@@ -1,11 +1,15 @@
 use core::cell::UnsafeCell;
 use core::slice;
 
+use ::limine::memory_map;
+use ::limine::memory_map::EntryType;
 use spin::Once;
 
 use crate::limine;
 use crate::memory::*;
 use crate::terminal::logger;
+use crate::terminal::logger::debug;
+use crate::terminal::println;
 
 static ALLOCATOR_PTR: Once<AllocatorPtr> = Once::new();
 
@@ -27,6 +31,10 @@ pub fn allocate(size: usize) -> PhysicalAddress {
     with_allocator(|a| a.allocate(size))
 }
 
+pub fn allocate_at_least(size: usize) -> PhysicalAddress {
+    with_allocator(|a| a.allocate_at_least(size))
+}
+
 pub fn free(address: PhysicalAddress) {
     with_allocator(|a| a.free(address))
 }
@@ -43,7 +51,8 @@ where
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BlockState {
+pub enum BlockState {
+    //pub
     Free = 0b00,
     Allocated = 0b01,
     Split = 0b10,
@@ -214,7 +223,7 @@ impl BuddyAllocator {
         let mut block = block;
         while let Some(parent) = Self::parent(block) {
             if let Some(buddy) = Self::buddy(block) {
-                if self.state(block).is_usable() && self.state(buddy).is_usable() {
+                if self.state(block).is_free() && self.state(buddy).is_free() {
                     self.set_state(parent, BlockState::Free);
                 } else if self.state(block).is_usable() || self.state(buddy).is_usable() {
                     self.set_state(parent, BlockState::Split);
@@ -228,7 +237,8 @@ impl BuddyAllocator {
     }
 
     #[inline(always)]
-    fn block_tree(&self) -> &[BlockState] {
+    pub fn block_tree(&self) -> &[BlockState] {
+        //pub
         unsafe { &*self.block_tree }
     }
 
@@ -252,6 +262,45 @@ impl BuddyAllocator {
         self.allocate_order(self.order_for_size(size).unwrap())
     }
 
+    #[inline(always)]
+    pub fn allocate_at_least(&mut self, size: usize) -> PhysicalAddress {
+        let mut real_size = PAGE_SIZE;
+        let mut order = self.max_order;
+
+        while real_size < size {
+            if order == 0 {
+                panic!(
+                    "Impossible to allocate required size <{}>: too large for allocator",
+                    size
+                );
+            }
+            real_size <<= 1;
+            order -= 1;
+        }
+
+        self.allocate_order(order)
+    }
+
+    #[inline(always)]
+    pub fn allocate_at_least_debug(&mut self, size: usize) -> PhysicalAddress {
+        let mut real_size = PAGE_SIZE;
+        let mut order = self.max_order;
+
+        while real_size < size {
+            if order == 0 {
+                panic!(
+                    "Impossible to allocate required size <{}>: too large for allocator",
+                    size
+                );
+            }
+            real_size <<= 1;
+            order -= 1;
+        }
+
+        logger::info!("size {}", self.size_for_order(order));
+        self.allocate_order(order)
+    }
+
     #[inline]
     fn allocate_block(&mut self, block: usize, order: u8) -> PhysicalAddress {
         self.set_state(block, BlockState::Allocated);
@@ -261,9 +310,18 @@ impl BuddyAllocator {
 
     #[inline]
     pub fn allocate_order(&mut self, order: u8) -> PhysicalAddress {
+        if order > self.max_order {
+            panic!(
+                "Impossible to allocate required order <{}>: too large for allocator",
+                order
+            );
+        }
+
+        let mut path = [0; 255];
         let mut current_order = 0;
         let mut current_block = 1;
         loop {
+            path[current_order as usize] = current_block;
             if current_order == order {
                 if self.state(current_block).is_free() {
                     return self.allocate_block(current_block, order);
@@ -272,10 +330,20 @@ impl BuddyAllocator {
                 {
                     return self.allocate_block(buddy, order);
                 } else {
-                    // Should be caught earlier unless allocating order = 0
-                    panic!(
-                        "CRITICAL [FR0]: No free block for order size {order} in frame allocator"
-                    );
+                    // backtrack the current path
+                    current_block = current_block | 1;
+                    while current_block & 1 == 1 || !self.state(current_block + 1).is_usable() {
+                        // path[current_order as usize] = 0;
+                        current_block = path[(current_order - 1) as usize];
+                        current_order -= 1;
+
+                        if current_block == 0 {
+                            panic!(
+                                "[FR0]: No free block for order size {order} in frame allocator"
+                            );
+                        }
+                    }
+                    current_block += 1;
                 }
             }
 
@@ -288,7 +356,7 @@ impl BuddyAllocator {
                 current_block = buddy << 1;
                 current_order += 1;
             } else {
-                panic!("CRITICAL [FR1]: No free block for order size {order} in frame allocator");
+                panic!("[FR1]: No free block for order size {order} in frame allocator");
             }
         }
     }
@@ -313,7 +381,7 @@ impl BuddyAllocator {
 
             if block >= self.block_tree.len() {
                 panic!(
-                    "CRITICAL [FR2]: Could not free because no allocated block was found for address: {address:?}"
+                    "[FR2]: Could not free because no allocated block was found for address: {address:?}"
                 );
             }
         }
@@ -371,6 +439,7 @@ impl BuddyAllocator {
             PAGE_SIZE / 1024,
             count
         );
+
         logger::debug!("Allocating all blocks");
         for i in 0..count - 1 {
             let frame = self.allocate(PAGE_SIZE);
@@ -379,6 +448,10 @@ impl BuddyAllocator {
                 ptr.write_bytes((i & 0xFF) as u8, PAGE_SIZE);
                 slice::from_raw_parts_mut(ptr, PAGE_SIZE)
             };
+
+            if i % 100000 == 0 {
+                logger::debug!("i: {}", i);
+            }
 
             if frame.iter().any(|&b| b != (i & 0xFF) as u8) {
                 logger::error!("invalid read/write for frame {}", i);

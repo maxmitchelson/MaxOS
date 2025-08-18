@@ -47,6 +47,11 @@ impl FramebufferDriver {
         self.info.pitch
     }
 
+    #[inline]
+    pub fn buffer_len(&self) -> usize {
+        self.info.height * self.info.pitch
+    }
+
     pub fn buffer<'a>(&'a self) -> MutexGuard<'a, Framebuffer<'static>> {
         self.device.lock()
     }
@@ -126,6 +131,30 @@ impl<'a> Framebuffer<'a> {
     #[inline(always)]
     pub fn update_from_slice(&mut self, slice: &[u32]) {
         self.buffer.copy_from_slice(slice);
+    }
+
+    pub fn update_range_from_slice(&mut self, start: usize, end: usize, slice: &[u32]) {
+        (&mut self.buffer[start..end]).copy_from_slice(slice);
+    }
+
+    #[inline]
+    pub fn width(&self) -> usize {
+        self.info.width
+    }
+
+    #[inline]
+    pub fn height(&self) -> usize {
+        self.info.height
+    }
+
+    #[inline]
+    pub fn pitch(&self) -> usize {
+        self.info.pitch
+    }
+
+    #[inline]
+    pub fn buffer_len(&self) -> usize {
+        self.info.height * self.info.pitch
     }
 }
 

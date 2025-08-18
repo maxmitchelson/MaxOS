@@ -19,17 +19,14 @@ pub extern "C" fn _start() -> ! {
     limine::init();
     cpu::interrupts::init();
     drivers::framebuffer::init();
-    terminal::init();
     memory::frame_allocator::init();
+    terminal::init();
 
-    logger::info!("Hello MaxOS!");
-    logger::info!("HHDM offset: {:#X}", limine::hhdm_offset());
+    logger::info!("Initialization sequence over!");
 
-    logger::debug!("Debug messsage");
-    logger::info!("Info message");
-    logger::warning!("Warning message");
-    logger::error!("Error messaage");
-    logger::critical!("Critical messaage");
+    for i in 0..100 {
+        logger::info!("{}", i);
+    }
 
     logger::info!("Exit!");
 
@@ -39,14 +36,14 @@ pub extern "C" fn _start() -> ! {
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     if let Some(location) = info.location() {
-        crate::logger::critical!(
+        logger::critical!(
             "Panic at {}:{}: {} \n",
             location.file(),
             location.line(),
             info.message()
         );
     } else {
-        crate::logger::critical!("Panic: {} \n", info.message())
+        logger::critical!("Panic: {} \n", info.message())
     }
     halt()
 }
