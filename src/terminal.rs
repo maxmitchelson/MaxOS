@@ -4,7 +4,7 @@ use crate::drivers::framebuffer;
 use crate::drivers::framebuffer::{Framebuffer, RGB};
 
 use noto_sans_mono_bitmap::{FontWeight, RasterHeight, get_raster, get_raster_width};
-use spin::{MutexGuard, Once, RwLock};
+use spin::{MutexGuard, Once, Mutex};
 
 const HORIZONTAL_MARGIN: usize = 20;
 const VERTICAL_MARGIN: usize = 20;
@@ -12,20 +12,24 @@ const VERTICAL_MARGIN: usize = 20;
 const FONT_STYLE: FontWeight = FontWeight::Regular;
 const FONT_SIZE: RasterHeight = RasterHeight::Size20;
 
-pub static _WRITER: Once<TerminalWriter> = Once::new();
+pub static _WRITER: Once<Mutex<Terminal<'static>>> = Once::new();
 
-pub struct TerminalWriter(RwLock<Terminal<'static>>);
+pub struct TerminalWriter;
 impl TerminalWriter {
-    /// Simply calls fmt::write_fmt on the Terminal. This wrapper is necessary because the
-    /// write_fmt method requires a mutable borrow that would need to be acquired before calling
-    /// it. In case of nested terminal writes, not using this would result in deadlocks.
-    pub fn write_to_terminal(&self, s: core::fmt::Arguments) -> core::fmt::Result {
-        self.0.write().write_fmt(s)
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl Write for TerminalWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        _WRITER.get().unwrap().lock().write_str(s);
+        Ok(())
     }
 }
 
 pub fn init() {
-    _WRITER.call_once(|| TerminalWriter(RwLock::new(Terminal::new())));
+    _WRITER.call_once(|| Mutex::new(Terminal::new()));
 }
 
 pub struct Terminal<'a> {
@@ -125,6 +129,7 @@ impl Theme {
             RGB::from_hex(0xa6adc8),
         ],
     };
+
     const GRUVBOX: Theme = Self {
         foreground: RGB::from_hex(0xebdbb2),
         background: RGB::from_hex(0x282828),

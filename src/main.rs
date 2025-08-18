@@ -81,7 +81,9 @@ pub extern "C" fn _start() -> ! {
 #[macro_export]
 macro_rules! print {
     ($($arg:tt)*) => {{
-        let _ = $crate::terminal::_WRITER.get().unwrap().write_to_terminal(format_args!($($arg)*));
+        let mut writer = $crate::terminal::TerminalWriter::new();
+        use core::fmt::Write;
+        let _ = write!(writer, $($arg)*);
     }};
 }
 
