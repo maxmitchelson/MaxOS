@@ -3,7 +3,7 @@
 #![feature(abi_x86_interrupt)]
 
 mod cpu;
-mod framebuffer;
+mod drivers;
 mod limine;
 mod memory;
 mod terminal;
@@ -11,29 +11,21 @@ mod terminal;
 use core::arch::asm;
 use core::panic::PanicInfo;
 
-use spin::{Lazy, RwLock};
-use terminal::TerminalDriver;
-
-use crate::framebuffer::Framebuffer;
-use crate::memory::frame_allocator;
-use crate::terminal::Terminal;
-
-static FRAMEBUFFER: Lazy<RwLock<Framebuffer>> =
-    Lazy::new(|| RwLock::new(limine::get_framebuffer()));
-static TERMINAL: Lazy<TerminalDriver> =
-    Lazy::new(|| TerminalDriver(RwLock::new(Terminal::new(&FRAMEBUFFER))));
-
 #[unsafe(no_mangle)]
 pub extern "C" fn _start() -> ! {
     limine::init();
     cpu::interrupts::init();
+    drivers::framebuffer::init();
+    terminal::init();
+    memory::frame_allocator::init();
 
     println!("Hello MaxOS!");
     println!("HHDM offset: {:#X}", limine::hhdm_offset());
+    println!("Exit!");
 
-    unsafe {
-        asm!("int 0");
-    };
+    // unsafe {
+    //     asm!("int 0");
+    // };
 
     // Terrible testing code, this behavior should be made much MUCH easier
     // let pt = memory::paging::get_active_level_4_table();
@@ -69,22 +61,41 @@ pub extern "C" fn _start() -> ! {
     //     }
     // }
 
-    println!("Initializing frame allocator");
-    frame_allocator::init();
-    println!("Allocating single frame");
-    let frame = frame_allocator::allocate(4096);
-    let frame = unsafe { &mut *frame.to_virtual().to_ptr::<[u8; 4096]>() };
+    // println!("Initializing frame allocator");
+    // frame_allocator::init();
+    // println!("Allocating single frame");
+    // let frame = frame_allocator::allocate(4096);
+    // let frame = unsafe { &mut *frame.to_virtual().to_ptr::<[u8; 4096]>() };
+    //
+    // println!("Writing to allocated frame");
+    // for byte in &mut *frame {
+    //     *byte = 1;
+    // }
+    //
+    // println!("Stress testing the frame allocator");
+    // frame_allocator::with_allocator(|a| a.stress());
 
-    println!("Writing to allocated frame");
-    for byte in &mut *frame {
-        *byte = 1;
-    }
-
-    println!("Stress testing the frame allocator");
-    frame_allocator::with_allocator(|a| a.stress());
-
-    println!("Exit!");
     halt();
+}
+
+#[macro_export]
+macro_rules! print {
+    ($($arg:tt)*) => {{
+        let _ = $crate::terminal::_WRITER.get().unwrap().write_to_terminal(format_args!($($arg)*));
+    }};
+}
+
+#[macro_export]
+macro_rules! println {
+    () => {
+        $crate::print!("\n")
+    };
+    ($fmt:expr) => {
+        $crate::print!(concat!($fmt, "\n"))
+    };
+    ($fmt:expr, $($arg:tt)*) => {
+        $crate::print!(concat!($fmt, "\n"), $($arg)*)
+    };
 }
 
 #[panic_handler]

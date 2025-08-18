@@ -1,7 +1,5 @@
-use crate::framebuffer::{Framebuffer, FramebufferInfo};
-use core::slice;
+use crate::drivers::framebuffer::FramebufferInfo;
 use core::sync::atomic::AtomicBool;
-use limine::framebuffer::MemoryModel;
 use limine::request::{
     FramebufferRequest, HhdmRequest, MemoryMapRequest, RequestsEndMarker, RequestsStartMarker,
 };
@@ -95,23 +93,10 @@ pub fn acquire_memory_map() -> Option<MemoryMap> {
     }
 }
 
-pub fn get_framebuffer() -> Framebuffer {
-    let limine_framebuffers = FRAMEBUFFER_REQUEST.get_response().unwrap().framebuffers();
-
-    for buffer in limine_framebuffers {
-        let info = FramebufferInfo::from_limine_framebuffer(&buffer);
-        let size = info.pitch * info.height;
-
-        if buffer.memory_model() != MemoryModel::RGB || info.bytes_per_pixel != 4 {
-            continue; // incompatible pixel layout
-        }
-
-        let buffer_slice = unsafe { slice::from_raw_parts_mut(buffer.addr() as *mut u32, size) };
-        return Framebuffer {
-            info,
-            buffer: buffer_slice,
-        };
-    }
-
-    panic!("No valid framebuffer found");
+pub fn framebuffer_information() -> impl Iterator<Item = (*mut u8, FramebufferInfo)> {
+    FRAMEBUFFER_REQUEST
+        .get_response()
+        .unwrap()
+        .framebuffers()
+        .flat_map(FramebufferInfo::from)
 }
