@@ -19,14 +19,12 @@ pub extern "C" fn _start() -> ! {
     limine::init();
     cpu::interrupts::init();
     drivers::framebuffer::init();
-    memory::frame_allocator::init();
     terminal::init();
+    memory::frame_allocator::init();
 
     logger::info!("Initialization sequence over!");
 
-    for i in 0..100 {
-        logger::info!("{}", i);
-    }
+    memory::frame_allocator::with_allocator(|a| a.stress());
 
     logger::info!("Exit!");
 

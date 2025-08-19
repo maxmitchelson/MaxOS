@@ -1,15 +1,11 @@
 use core::cell::UnsafeCell;
 use core::slice;
 
-use ::limine::memory_map;
-use ::limine::memory_map::EntryType;
 use spin::Once;
 
 use crate::limine;
 use crate::memory::*;
 use crate::terminal::logger;
-use crate::terminal::logger::debug;
-use crate::terminal::println;
 
 static ALLOCATOR_PTR: Once<AllocatorPtr> = Once::new();
 
@@ -27,18 +23,22 @@ pub fn init() {
     });
 }
 
+#[inline(always)]
 pub fn allocate(size: usize) -> PhysicalAddress {
     with_allocator(|a| a.allocate(size))
 }
 
+#[inline(always)]
 pub fn allocate_at_least(size: usize) -> PhysicalAddress {
     with_allocator(|a| a.allocate_at_least(size))
 }
 
+#[inline(always)]
 pub fn free(address: PhysicalAddress) {
     with_allocator(|a| a.free(address))
 }
 
+#[inline]
 pub fn with_allocator<F, R>(func: F) -> R
 where
     F: Fn(&mut BuddyAllocator) -> R,
@@ -51,8 +51,7 @@ where
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BlockState {
-    //pub
+enum BlockState {
     Free = 0b00,
     Allocated = 0b01,
     Split = 0b10,
@@ -73,9 +72,11 @@ impl BlockState {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 pub enum FrallocError {
     NoUsableMemory,
     NotEnoughAvailableMemory,
+    BadRange(PhysicalAddress, PhysicalAddress),
 }
 
 #[derive(Debug)]
@@ -83,35 +84,36 @@ pub struct BuddyAllocator {
     region_start: PhysicalAddress,
     region_end: PhysicalAddress,
     max_order: u8,
-    block_tree: *mut [BlockState],
+    markers: *mut [usize],
+    state_tree: *mut [BlockState],
 }
 
 impl BuddyAllocator {
     pub fn new_embedded(memory_map: limine::MemoryMap) -> Result<Self, FrallocError> {
         let (usable_start, usable_end) = Self::get_usable_region(memory_map)?;
+        let max_order = Self::max_order_for_usable_region(usable_start, usable_end);
 
-        let length = (usable_end - usable_start).value();
-        let max_order = Self::max_order_for_length(length);
         let tree_size = Self::size_of_tree_for_order(max_order);
+        let markers_size = Self::size_of_markers_for_order(max_order);
+        let total_size = markers_size + tree_size;
 
-        let mut possible_tree_pos = memory_map
-            .usable_entries()
-            .filter(|e| e.length as usize >= tree_size);
+        let data_start = Self::select_data_start(&memory_map, total_size)?;
 
-        let tree_start = match possible_tree_pos.next() {
-            Some(region) => PhysicalAddress::from_u64(region.base),
-            None => return Err(FrallocError::NotEnoughAvailableMemory),
-        };
+        let markers_start = data_start;
+        let tree_start = markers_start + markers_size;
 
-        let block_tree = unsafe { Self::init_block_tree(tree_start, tree_size) };
+        let state_tree = unsafe { Self::init_block_tree(tree_start, tree_size) };
+        let markers = unsafe { Self::init_markers(markers_start, max_order as usize + 1) };
+
         let mut allocator = Self {
             region_start: align_up(tree_start + tree_size, PAGE_SIZE),
             region_end: usable_end,
             max_order,
-            block_tree,
+            markers,
+            state_tree,
         };
 
-        allocator.set_reserved_from_mmap(memory_map);
+        allocator.set_reserved_from_mmap(memory_map)?;
         Ok(allocator)
     }
 
@@ -127,6 +129,21 @@ impl BuddyAllocator {
             PhysicalAddress::from_u64(first.base),
             PhysicalAddress::from_u64(last.base + last.length),
         ))
+    }
+
+    unsafe fn init_markers(markers_start: PhysicalAddress, markers_size: usize) -> *mut [usize] {
+        unsafe {
+            let list = slice::from_raw_parts_mut(
+                markers_start.to_virtual().to_ptr::<usize>(),
+                markers_size,
+            );
+
+            for (i, ptr) in list.iter_mut().enumerate() {
+                *ptr = 1 << i;
+            }
+
+            list
+        }
     }
 
     #[inline]
@@ -150,7 +167,10 @@ impl BuddyAllocator {
     ///
     /// Does not assume that all unusable memory is contained in the memory map and uses the holes
     /// between [`USABLE`](limine::memory_map::EntryType::USABLE) entries for safety.
-    fn set_reserved_from_mmap(&mut self, memory_map: limine::MemoryMap) {
+    fn set_reserved_from_mmap(
+        &mut self,
+        memory_map: limine::MemoryMap,
+    ) -> Result<(), FrallocError> {
         let mut usable = memory_map.usable_entries();
 
         let first = usable.next().unwrap();
@@ -158,11 +178,12 @@ impl BuddyAllocator {
 
         for entry in usable {
             let current_start = PhysicalAddress::from_u64(entry.base);
-            self.reserve_range(previous_end, current_start);
+            self.reserve_range(previous_end, current_start)?;
             previous_end = PhysicalAddress::from_u64(entry.base + entry.length);
         }
 
         self.reserve_all_after(previous_end);
+        Ok(())
     }
 
     #[inline(always)]
@@ -171,9 +192,13 @@ impl BuddyAllocator {
     }
 
     #[inline]
-    pub fn reserve_range(&mut self, start: PhysicalAddress, end: PhysicalAddress) {
+    pub fn reserve_range(
+        &mut self,
+        start: PhysicalAddress,
+        end: PhysicalAddress,
+    ) -> Result<(), FrallocError> {
         if end <= start {
-            panic!("Cannot reserve memory: bad range ({start:?}, {end:?})");
+            return Err(FrallocError::BadRange(start, end));
         }
 
         let first_block = self.page_block_from(self.clamp_addr(align_down(start, PAGE_SIZE)));
@@ -184,6 +209,7 @@ impl BuddyAllocator {
             self.set_state(block, BlockState::Reserved);
             self.update_ancestors(block);
         }
+        Ok(())
     }
 
     #[inline]
@@ -191,7 +217,7 @@ impl BuddyAllocator {
         let block = self.page_block_from(self.clamp_addr(align_down(address + 1, PAGE_SIZE)));
         let offset = Self::offset_for_order(self.max_order);
 
-        for block in block + offset..self.block_tree.len() {
+        for block in block + offset..self.state_tree.len() {
             self.set_state(block, BlockState::Reserved);
             self.update_ancestors(block);
         }
@@ -236,25 +262,65 @@ impl BuddyAllocator {
         }
     }
 
-    #[inline(always)]
-    pub fn block_tree(&self) -> &[BlockState] {
-        //pub
-        unsafe { &*self.block_tree }
+    #[inline]
+    fn mark_subtree(&mut self, block: usize, state: BlockState) {
+        let mut level_size = 1;
+        let mut level_start = block;
+
+        while level_start < self.state_tree.len() {
+            for i in level_start..level_start + level_size {
+                if self.state(i) != BlockState::Reserved {
+                    self.set_state(i, state);
+                }
+            }
+            level_start <<= 1;
+            level_size <<= 1;
+        }
     }
 
     #[inline(always)]
-    fn block_tree_mut(&mut self) -> &mut [BlockState] {
-        unsafe { &mut *self.block_tree }
+    fn markers(&self) -> &[usize] {
+        unsafe { &*self.markers }
+    }
+
+    #[inline(always)]
+    fn markers_mut(&mut self) -> &mut [usize] {
+        unsafe { &mut *self.markers }
+    }
+
+    #[inline(always)]
+    fn marker_for(&self, order: u8) -> usize {
+        usize::max(1 << order, self.markers()[order as usize])
+    }
+
+    fn set_marker_min(&mut self, order: u8, min: usize) {
+        let order = order as usize;
+        unsafe {
+            let markers = &mut *self.markers;
+            if markers[order] > min {
+                markers[order] = min;
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn state_tree(&self) -> &[BlockState] {
+        unsafe { &*self.state_tree }
+    }
+
+    #[inline(always)]
+    fn state_tree_mut(&mut self) -> &mut [BlockState] {
+        unsafe { &mut *self.state_tree }
     }
 
     #[inline(always)]
     fn state(&self, block: usize) -> BlockState {
-        self.block_tree()[block]
+        self.state_tree()[block]
     }
 
     #[inline(always)]
     fn set_state(&mut self, block: usize, state: BlockState) {
-        self.block_tree_mut()[block] = state;
+        self.state_tree_mut()[block] = state;
     }
 
     #[inline(always)]
@@ -281,84 +347,25 @@ impl BuddyAllocator {
         self.allocate_order(order)
     }
 
-    #[inline(always)]
-    pub fn allocate_at_least_debug(&mut self, size: usize) -> PhysicalAddress {
-        let mut real_size = PAGE_SIZE;
-        let mut order = self.max_order;
-
-        while real_size < size {
-            if order == 0 {
-                panic!(
-                    "Impossible to allocate required size <{}>: too large for allocator",
-                    size
-                );
-            }
-            real_size <<= 1;
-            order -= 1;
-        }
-
-        logger::info!("size {}", self.size_for_order(order));
-        self.allocate_order(order)
-    }
-
     #[inline]
     fn allocate_block(&mut self, block: usize, order: u8) -> PhysicalAddress {
-        self.set_state(block, BlockState::Allocated);
+        self.mark_subtree(block, BlockState::Allocated);
         self.update_ancestors(block);
         self.region_start + self.size_for_order(order) * (block - (1 << order))
     }
 
     #[inline]
     pub fn allocate_order(&mut self, order: u8) -> PhysicalAddress {
-        if order > self.max_order {
-            panic!(
-                "Impossible to allocate required order <{}>: too large for allocator",
-                order
-            );
-        }
+        let first = self.marker_for(order);
+        let last = 2 << order;
 
-        let mut path = [0; 255];
-        let mut current_order = 0;
-        let mut current_block = 1;
-        loop {
-            path[current_order as usize] = current_block;
-            if current_order == order {
-                if self.state(current_block).is_free() {
-                    return self.allocate_block(current_block, order);
-                } else if let Some(buddy) = Self::buddy(current_block)
-                    && self.state(buddy).is_free()
-                {
-                    return self.allocate_block(buddy, order);
-                } else {
-                    // backtrack the current path
-                    current_block = current_block | 1;
-                    while current_block & 1 == 1 || !self.state(current_block + 1).is_usable() {
-                        // path[current_order as usize] = 0;
-                        current_block = path[(current_order - 1) as usize];
-                        current_order -= 1;
-
-                        if current_block == 0 {
-                            panic!(
-                                "[FR0]: No free block for order size {order} in frame allocator"
-                            );
-                        }
-                    }
-                    current_block += 1;
-                }
-            }
-
-            if self.state(current_block).is_usable() {
-                current_block <<= 1;
-                current_order += 1;
-            } else if let Some(buddy) = Self::buddy(current_block)
-                && self.state(buddy).is_usable()
-            {
-                current_block = buddy << 1;
-                current_order += 1;
-            } else {
-                panic!("[FR1]: No free block for order size {order} in frame allocator");
+        for block in first..last {
+            if self.state(block).is_free() {
+                self.markers_mut()[order as usize] = block + 1;
+                return self.allocate_block(block, order);
             }
         }
+        panic!("[FR0]: No free block for order size {order} in frame_allocator");
     }
 
     #[inline]
@@ -375,18 +382,21 @@ impl BuddyAllocator {
         let block_offset = val >> rev_order;
 
         let mut block = order_offset + block_offset;
+        let mut order = self.max_order - rev_order;
 
         while !matches!(self.state(block), BlockState::Allocated) {
             block <<= 1;
+            order += 1;
 
-            if block >= self.block_tree.len() {
+            if block >= self.state_tree.len() {
                 panic!(
-                    "[FR2]: Could not free because no allocated block was found for address: {address:?}"
+                    "[FR1]: Could not free because no allocated block was found for address: {address:?}"
                 );
             }
         }
 
-        self.set_state(block, BlockState::Free);
+        self.set_marker_min(order, block);
+        self.mark_subtree(block, BlockState::Free);
         self.update_ancestors(block);
     }
 
@@ -406,7 +416,11 @@ impl BuddyAllocator {
     }
 
     #[inline(always)]
-    fn max_order_for_length(length: usize) -> u8 {
+    fn max_order_for_usable_region(
+        usable_start: PhysicalAddress,
+        usable_end: PhysicalAddress,
+    ) -> u8 {
+        let length = (usable_end - usable_start).value();
         let mut order = 0;
         let mut block_factor = (length - 1) >> PAGE_SIZE.trailing_zeros();
 
@@ -418,12 +432,29 @@ impl BuddyAllocator {
         order
     }
 
-    #[inline(always)]
     fn size_of_tree_for_order(order: u8) -> usize {
         1 << (order + 1)
     }
 
-    // TEST: should be marked as test when #4 is implemented
+    fn size_of_markers_for_order(order: u8) -> usize {
+        (order as usize + 1) * size_of::<usize>()
+    }
+
+    fn select_data_start(
+        memory_map: &limine::MemoryMap,
+        data_size: usize,
+    ) -> Result<PhysicalAddress, FrallocError> {
+        let mut possible_data_pos = memory_map
+            .usable_entries()
+            .filter(|e| e.length as usize >= data_size);
+
+        match possible_data_pos.next() {
+            Some(region) => Ok(PhysicalAddress::from_u64(region.base)),
+            None => Err(FrallocError::NotEnoughAvailableMemory),
+        }
+    }
+
+    // TEST: should be REDESIGNED and marked as test when #4 is implemented
     pub fn stress(&mut self) {
         let offset = 1 << self.max_order;
         let mut count = 0usize;
