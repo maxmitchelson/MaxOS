@@ -1,4 +1,6 @@
 use core::cell::UnsafeCell;
+use core::error;
+use core::fmt;
 use core::slice;
 
 use spin::Once;
@@ -24,13 +26,13 @@ pub fn init() {
 }
 
 #[inline(always)]
-pub fn allocate(size: usize) -> PhysicalAddress {
-    with_allocator(|a| a.allocate(size))
+pub fn allocate_exact(size: usize) -> PhysicalAddress {
+    with_allocator(|a| a.allocate_exact(size))
 }
 
 #[inline(always)]
-pub fn allocate_at_least(size: usize) -> PhysicalAddress {
-    with_allocator(|a| a.allocate_at_least(size))
+pub fn allocate(size: usize) -> PhysicalAddress {
+    with_allocator(|a| a.allocate(size))
 }
 
 #[inline(always)]
@@ -72,12 +74,32 @@ impl BlockState {
 }
 
 #[derive(Debug)]
-#[allow(unused)]
-pub enum FrallocError {
+pub enum InitializationError {
     NoUsableMemory,
     NotEnoughAvailableMemory,
     BadRange(PhysicalAddress, PhysicalAddress),
 }
+
+impl fmt::Display for InitializationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoUsableMemory => write!(
+                f,
+                "Could not create the frame allocator because the provided memory map reports no usable memory"
+            ),
+            Self::NotEnoughAvailableMemory => write!(
+                f,
+                "Could not create the frame allocator because the provided memory map reports too few usable memory"
+            ),
+            Self::BadRange(start, end) => f.write_fmt(format_args!(
+                "Could not reserve memory for range [{:?}..{:?}] because it is an invalid range",
+                start, end
+            )),
+        }
+    }
+}
+
+impl error::Error for InitializationError {}
 
 #[derive(Debug)]
 pub struct BuddyAllocator {
@@ -89,7 +111,7 @@ pub struct BuddyAllocator {
 }
 
 impl BuddyAllocator {
-    pub fn new_embedded(memory_map: limine::MemoryMap) -> Result<Self, FrallocError> {
+    pub fn new_embedded(memory_map: limine::MemoryMap) -> Result<Self, InitializationError> {
         let (usable_start, usable_end) = Self::get_usable_region(memory_map)?;
         let max_order = Self::max_order_for_usable_region(usable_start, usable_end);
 
@@ -119,12 +141,11 @@ impl BuddyAllocator {
 
     fn get_usable_region(
         memory_map: limine::MemoryMap,
-    ) -> Result<(PhysicalAddress, PhysicalAddress), FrallocError> {
+    ) -> Result<(PhysicalAddress, PhysicalAddress), InitializationError> {
         let mut usable = memory_map.usable_entries();
 
-        let first = usable.next().ok_or(FrallocError::NoUsableMemory)?;
+        let first = usable.next().ok_or(InitializationError::NoUsableMemory)?;
         let last = usable.next_back().unwrap_or(first);
-
         Ok((
             PhysicalAddress::from_u64(first.base),
             PhysicalAddress::from_u64(last.base + last.length),
@@ -170,7 +191,7 @@ impl BuddyAllocator {
     fn set_reserved_from_mmap(
         &mut self,
         memory_map: limine::MemoryMap,
-    ) -> Result<(), FrallocError> {
+    ) -> Result<(), InitializationError> {
         let mut usable = memory_map.usable_entries();
 
         let first = usable.next().unwrap();
@@ -196,9 +217,9 @@ impl BuddyAllocator {
         &mut self,
         start: PhysicalAddress,
         end: PhysicalAddress,
-    ) -> Result<(), FrallocError> {
+    ) -> Result<(), InitializationError> {
         if end <= start {
-            return Err(FrallocError::BadRange(start, end));
+            return Err(InitializationError::BadRange(start, end));
         }
 
         let first_block = self.page_block_from(self.clamp_addr(align_down(start, PAGE_SIZE)));
@@ -324,27 +345,31 @@ impl BuddyAllocator {
     }
 
     #[inline(always)]
-    pub fn allocate(&mut self, size: usize) -> PhysicalAddress {
+    pub fn allocate_exact(&mut self, size: usize) -> PhysicalAddress {
         self.allocate_order(self.order_for_size(size).unwrap())
     }
 
     #[inline(always)]
-    pub fn allocate_at_least(&mut self, size: usize) -> PhysicalAddress {
-        let mut real_size = PAGE_SIZE;
-        let mut order = self.max_order;
+    pub fn allocate(&mut self, size: usize) -> PhysicalAddress {
+        assert!(size != 0);
+        if is_aligned(size, PAGE_SIZE) && is_power_of_two(size) {
+            self.allocate_exact(size)
+        } else {
+            let mut reverse_order = 0;
+            while PAGE_SIZE << reverse_order < size {
+                reverse_order += 1;
 
-        while real_size < size {
-            if order == 0 {
-                panic!(
-                    "Impossible to allocate required size <{}>: too large for allocator",
-                    size
-                );
+                if reverse_order > self.max_order {
+                    panic!(
+                        "Unsupported allocation for size {}, max supported size is {}",
+                        size,
+                        PAGE_SIZE << self.max_order
+                    );
+                }
             }
-            real_size <<= 1;
-            order -= 1;
-        }
 
-        self.allocate_order(order)
+            self.allocate_order(self.max_order - reverse_order)
+        }
     }
 
     #[inline]
@@ -443,14 +468,14 @@ impl BuddyAllocator {
     fn select_data_start(
         memory_map: &limine::MemoryMap,
         data_size: usize,
-    ) -> Result<PhysicalAddress, FrallocError> {
+    ) -> Result<PhysicalAddress, InitializationError> {
         let mut possible_data_pos = memory_map
             .usable_entries()
             .filter(|e| e.length as usize >= data_size);
 
         match possible_data_pos.next() {
             Some(region) => Ok(PhysicalAddress::from_u64(region.base)),
-            None => Err(FrallocError::NotEnoughAvailableMemory),
+            None => Err(InitializationError::NotEnoughAvailableMemory),
         }
     }
 
@@ -473,7 +498,7 @@ impl BuddyAllocator {
 
         logger::debug!("Allocating all blocks");
         for i in 0..count - 1 {
-            let frame = self.allocate(PAGE_SIZE);
+            let frame = self.allocate_exact(PAGE_SIZE);
             let frame = unsafe {
                 let ptr = frame.to_virtual().to_ptr::<u8>();
                 ptr.write_bytes((i & 0xFF) as u8, PAGE_SIZE);
@@ -489,7 +514,7 @@ impl BuddyAllocator {
             }
         }
 
-        let frame = self.allocate(PAGE_SIZE);
+        let frame = self.allocate_exact(PAGE_SIZE);
 
         let mut count = 0;
         for i in offset..offset + offset {
@@ -502,7 +527,7 @@ impl BuddyAllocator {
         logger::debug!("Address for last allocated frame: {:?}", frame);
         logger::debug!("Freeing and reallocating last allocated frame");
         self.free(frame);
-        let new_frame = self.allocate(PAGE_SIZE);
+        let new_frame = self.allocate_exact(PAGE_SIZE);
         if new_frame == frame {
             logger::debug!("Same frame recieved");
         } else {
