@@ -18,9 +18,9 @@ pub static LOGGER: Logger = Logger::new(LogLevel::Debug);
 pub extern "C" fn _start() -> ! {
     limine::init();
     cpu::interrupts::init();
+    memory::frame_allocator::init();
     drivers::framebuffer::init();
     terminal::init();
-    memory::frame_allocator::init();
 
     logger::info!("Initialization sequence over!");
 

@@ -1,6 +1,7 @@
 use core::cell::UnsafeCell;
 use core::error;
 use core::fmt;
+use core::mem::MaybeUninit;
 use core::slice;
 
 use spin::Once;
@@ -154,32 +155,24 @@ impl BuddyAllocator {
 
     unsafe fn init_markers(markers_start: PhysicalAddress, markers_size: usize) -> *mut [usize] {
         unsafe {
-            let list = slice::from_raw_parts_mut(
-                markers_start.to_virtual().to_ptr::<usize>(),
-                markers_size,
-            );
+            let start_ptr = markers_start.to_virtual().to_ptr::<MaybeUninit<usize>>();
+            let uninit_list = slice::from_raw_parts_mut(start_ptr, markers_size);
 
-            for (i, ptr) in list.iter_mut().enumerate() {
-                *ptr = 1 << i;
+            for (i, elem) in uninit_list.iter_mut().enumerate() {
+                elem.write(1 << i);
             }
 
-            list
+            slice::from_raw_parts_mut(start_ptr as *mut usize, markers_size)
         }
     }
 
     #[inline]
     unsafe fn init_block_tree(tree_start: PhysicalAddress, tree_size: usize) -> *mut [BlockState] {
         unsafe {
-            let block_tree = slice::from_raw_parts_mut(
-                tree_start.to_virtual().to_ptr::<BlockState>(),
-                tree_size,
-            );
-
-            block_tree
-                .as_mut_ptr()
-                .write_bytes(BlockState::Free as u8, tree_size);
-            block_tree[0] = BlockState::Reserved;
-            block_tree
+            let start_ptr = tree_start.to_virtual().to_ptr::<BlockState>();
+            start_ptr.write_bytes(BlockState::Free as u8, tree_size);
+            start_ptr.write(BlockState::Allocated);
+            slice::from_raw_parts_mut(start_ptr, tree_size)
         }
     }
 
