@@ -37,6 +37,11 @@ pub fn allocate(size: usize) -> PhysicalAddress {
 }
 
 #[inline(always)]
+pub fn reallocate(address: PhysicalAddress, size: usize) -> PhysicalAddress {
+    with_allocator(|a| a.reallocate(address, size))
+}
+
+#[inline(always)]
 pub fn free(address: PhysicalAddress) {
     with_allocator(|a| a.free(address))
 }
@@ -369,7 +374,7 @@ impl BuddyAllocator {
     fn allocate_block(&mut self, block: usize, order: u8) -> PhysicalAddress {
         self.mark_subtree(block, BlockState::Allocated);
         self.update_ancestors(block);
-        self.region_start + self.size_for_order(order) * (block - (1 << order))
+        self.address_for_block(block, order)
     }
 
     #[inline]
@@ -387,35 +392,142 @@ impl BuddyAllocator {
     }
 
     #[inline]
-    pub fn free(&mut self, address: PhysicalAddress) {
-        let val = (address - self.region_start).value() >> PAGE_SIZE.trailing_zeros();
+    /// If an allocated block exists for the `address` provided, returns its number and order as
+    /// a tuple of layout (number, order). Otherwise, panics.
+    fn find_allocated_block_for_addr(&self, address: PhysicalAddress) -> (usize, u8) {
+        let byte_offset = (address - self.region_start).value();
+        let page_offset = byte_offset / PAGE_SIZE;
 
-        let rev_order = if val == 0 {
-            self.max_order
-        } else {
-            val.trailing_zeros() as u8
+        let mut order = match page_offset {
+            0 => 0,
+            x => self.max_order - x.trailing_zeros() as u8,
         };
 
-        let order_offset = Self::offset_for_order(self.max_order - rev_order);
-        let block_offset = val >> rev_order;
+        let order_start = Self::offset_for_order(order);
+        let in_order_offset = page_offset >> (self.max_order - order);
 
-        let mut block = order_offset + block_offset;
-        let mut order = self.max_order - rev_order;
+        let mut block = order_start + in_order_offset;
 
-        while !matches!(self.state(block), BlockState::Allocated) {
+        while self.state(block) != BlockState::Allocated {
             block <<= 1;
             order += 1;
 
-            if block >= self.state_tree.len() {
-                panic!(
-                    "[FR1]: Could not free because no allocated block was found for address: {address:?}"
-                );
+            if order > self.max_order {
+                panic!("[FR1] Could not find allocated block for address: {address:?}");
             }
         }
 
+        (block, order)
+    }
+
+    #[inline(always)]
+    pub fn reallocate(&mut self, address: PhysicalAddress, size: usize) -> PhysicalAddress {
+        if size > 1 << self.max_order {
+            panic!(
+                "Cannot reallocate for size {size} because it is greater than the maximum supported size"
+            );
+        }
+
+        let (block, order) = self.find_allocated_block_for_addr(address);
+        let current_size = self.size_for_order(order);
+
+        if size == 0 {
+            unsafe {
+                self.free_raw(block, order);
+            }
+            logger::warning!("Called realloc with size 0, freeing instead");
+            return PhysicalAddress::null();
+        }
+
+        if size <= current_size >> 1 {
+            let mut new_order = order;
+            let mut new_block = block;
+            let mut new_size = current_size;
+
+            while new_order < self.max_order && size < new_size >> 1 {
+                new_block <<= 1; // left child
+                let right_child = new_block + 1;
+                new_order -= 1;
+                new_size >>= 1;
+
+                self.set_marker_min(new_order, right_child);
+                self.mark_subtree(right_child, BlockState::Free);
+            }
+
+            if new_block != block {
+                self.update_ancestors(new_block);
+            }
+
+            return address;
+        }
+
+        if size > current_size {
+            let mut new_size = current_size;
+            let mut new_block = block;
+            let mut always_left = block & 1 == 0;
+
+            while size > new_size {
+                if let Some(buddy) = Self::buddy(new_block) {
+                    if self.state(buddy).is_free() {
+                        new_size <<= 1;
+                        new_block >>= 1;
+                    } else {
+                        unsafe {
+                            let new = self.allocate(size);
+                            Self::copy_data(address, new, current_size);
+                            self.free_raw(block, order);
+                            return new;
+                        }
+                    }
+                    always_left &= new_block & 1 == 0;
+                }
+            }
+
+            let new_address = self.address_for_block(block, order);
+
+            unsafe {
+                if !always_left {
+                    Self::copy_data(address, new_address, current_size);
+                }
+            }
+
+            self.update_ancestors(new_block);
+            self.mark_subtree(new_block, BlockState::Allocated);
+            return new_address;
+        }
+
+        address
+    }
+
+    #[inline(always)]
+    /// SAFETY: Same safety requirements as [`core::ptr::copy`] for src and dst, generally:
+    /// - `src` must be valid for reads of at least `len` bytes
+    /// - `dst` must be valid for writes of at least `len` bytes
+    unsafe fn copy_data(src: PhysicalAddress, dst: PhysicalAddress, len: usize) {
+        unsafe {
+            let src_ptr = src.to_virtual().to_ptr::<MaybeUninit<u8>>();
+            let dst_ptr = dst.to_virtual().to_ptr::<MaybeUninit<u8>>();
+            core::ptr::copy(src_ptr, dst_ptr, len);
+        }
+    }
+
+    #[inline(always)]
+    pub fn free(&mut self, address: PhysicalAddress) {
+        let (block, order) = self.find_allocated_block_for_addr(address);
+        unsafe { self.free_raw(block, order) };
+    }
+
+    #[inline(always)]
+    /// SAFETY: Caller must ensure that `block` is an allocated block of order `order`
+    unsafe fn free_raw(&mut self, block: usize, order: u8) {
         self.set_marker_min(order, block);
         self.mark_subtree(block, BlockState::Free);
         self.update_ancestors(block);
+    }
+
+    #[inline(always)]
+    fn address_for_block(&self, block: usize, order: u8) -> PhysicalAddress {
+        self.region_start + self.size_for_order(order) * (block - (1 << order))
     }
 
     #[inline(always)]
