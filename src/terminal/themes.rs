@@ -65,3 +65,9 @@ impl Theme {
         ],
     };
 }
+
+impl Default for Theme {
+    fn default() -> Self {
+        Self::GRUVBOX
+    }
+}

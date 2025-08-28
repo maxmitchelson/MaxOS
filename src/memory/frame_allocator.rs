@@ -46,7 +46,7 @@ pub fn free(address: PhysicalAddress) {
     with_allocator(|a| a.free(address))
 }
 
-#[inline]
+#[inline(always)]
 pub fn with_allocator<F, R>(func: F) -> R
 where
     F: Fn(&mut BuddyAllocator) -> R,
@@ -177,7 +177,7 @@ impl BuddyAllocator {
             let start_ptr = tree_start.to_virtual().to_ptr::<BlockState>();
             start_ptr.write_bytes(BlockState::Free as u8, tree_size);
             start_ptr.write(BlockState::Allocated);
-            slice::from_raw_parts_mut(start_ptr, tree_size)
+            core::ptr::slice_from_raw_parts_mut(start_ptr, tree_size)
         }
     }
 

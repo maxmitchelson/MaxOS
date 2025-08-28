@@ -1,6 +1,6 @@
 use core::fmt;
 use fmt::Write;
-use crate::terminal::TerminalWriter;
+use crate::terminal::{tty::TerminalStdin};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogLevel {
@@ -47,8 +47,8 @@ impl Logger {
             return;
         }
 
-        let mut writer = TerminalWriter::new();
-        let _ = writeln!(writer, "[{:#}]: {}", level, message);
+        let mut stdin = TerminalStdin::new();
+        let _ = writeln!(stdin, "[{:#}]: {}", level, message);
     }
 
     pub fn log_args(&self, level: LogLevel, message: fmt::Arguments) {
@@ -56,8 +56,8 @@ impl Logger {
             return;
         }
 
-        let mut writer = TerminalWriter::new();
-        let _ = writeln!(writer, "[{:#}]: {}", level, message);
+        let mut stdin = TerminalStdin::new();
+        let _ = writeln!(stdin, "[{:#}]: {}", level, message);
     }
 
     pub fn debug(&self, message: &str) {

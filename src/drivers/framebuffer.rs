@@ -1,9 +1,9 @@
-use core::slice;
+use core::{fmt, slice};
 
 use spin::{Mutex, MutexGuard, Once};
 
 use crate::limine;
-use crate::memory::align_up;
+use crate::memory::{align_up, frame_allocator};
 
 static DRIVER: Once<FramebufferDriver> = Once::new();
 
@@ -13,46 +13,43 @@ pub struct FramebufferDriver {
 }
 
 pub fn init() {
-    let (ptr, info) = limine::framebuffer_information()
+    let (front_ptr, info) = limine::framebuffer_information()
         .next()
         .expect("No valid framebuffers found");
 
     let buffer_size = info.pitch * info.height;
-    let buffer = unsafe { slice::from_raw_parts_mut(ptr as *mut u32, buffer_size) };
+    let back_buffer = unsafe {
+let back_ptr = frame_allocator::allocate(buffer_size*4)
+            .to_virtual()
+            .to_ptr::<u32>();
 
-    let primary_framebuffer = Framebuffer { info, buffer };
+        slice::from_raw_parts_mut(back_ptr, buffer_size)
+    };
+
+    let front_buffer = unsafe { slice::from_raw_parts_mut(front_ptr as *mut u32, buffer_size) };
+
+    let primary_framebuffer = Framebuffer {
+        info,
+        front_buffer,
+        back_buffer,
+    };
     DRIVER.call_once(|| FramebufferDriver {
         info,
         device: Mutex::new(primary_framebuffer),
     });
 }
 
-pub fn get() -> &'static FramebufferDriver {
+pub fn driver() -> &'static FramebufferDriver {
     DRIVER.get().unwrap()
 }
 
 impl FramebufferDriver {
     #[inline]
-    pub fn width(&self) -> usize {
-        self.info.width
+    pub fn info(&self) -> FramebufferInfo {
+        self.info
     }
 
-    #[inline]
-    pub fn height(&self) -> usize {
-        self.info.height
-    }
-
-    #[inline]
-    pub fn pitch(&self) -> usize {
-        self.info.pitch
-    }
-
-    #[inline]
-    pub fn buffer_len(&self) -> usize {
-        self.info.height * self.info.pitch
-    }
-
-    pub fn buffer<'a>(&'a self) -> MutexGuard<'a, Framebuffer<'static>> {
+    pub fn device<'a>(&'a self) -> MutexGuard<'a, Framebuffer<'static>> {
         self.device.lock()
     }
 }
@@ -110,31 +107,58 @@ impl FramebufferInfo {
             },
         ))
     }
+
+    #[inline]
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    #[inline]
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    #[inline]
+    pub fn pitch(&self) -> usize {
+        self.pitch
+    }
+
+    #[inline]
+    pub fn buffer_len(&self) -> usize {
+        self.height * self.pitch
+    }
 }
 
 pub struct Framebuffer<'a> {
     info: FramebufferInfo,
-    buffer: &'a mut [u32],
+    back_buffer: &'a mut [u32],
+    front_buffer: &'a mut [u32],
 }
 
 impl<'a> Framebuffer<'a> {
     #[inline(always)]
-    pub fn set_pixel_value(&mut self, x: usize, y: usize, color: RGB) {
-        self.buffer[x + y * self.info.pitch] = color.into();
+    pub fn set_pixel(&mut self, x: usize, y: usize, color: RGB) {
+        self.back_buffer[x + y * self.info.pitch] = color.into();
+    }
+
+    #[inline(always)]
+    pub fn get_back_buffer_mut(&mut self) -> &mut [u32] {
+        self.back_buffer
+    }
+
+    #[inline(always)]
+    pub fn get_back_buffer(&self) -> &[u32] {
+        self.back_buffer
     }
 
     #[inline(always)]
     pub fn fill(&mut self, color: RGB) {
-        self.buffer.fill(color.into())
+        self.back_buffer.fill(color.into())
     }
 
     #[inline(always)]
-    pub fn update_from_slice(&mut self, slice: &[u32]) {
-        self.buffer.copy_from_slice(slice);
-    }
-
-    pub fn update_range_from_slice(&mut self, start: usize, end: usize, slice: &[u32]) {
-        (&mut self.buffer[start..end]).copy_from_slice(slice);
+    pub fn refresh(&mut self) {
+        self.front_buffer.copy_from_slice(&self.back_buffer);
     }
 
     #[inline]
@@ -200,7 +224,7 @@ impl RGB {
     pub const BLACK: RGB = RGB::new(0, 0, 0);
     pub const RED: RGB = RGB::new(255, 0, 0);
     pub const GREEN: RGB = RGB::new(0, 255, 0);
-    pub const BLUE: RGB = RGB::new(0,0,255);
+    pub const BLUE: RGB = RGB::new(0, 0, 255);
     pub const CYAN: RGB = RGB::new(0, 255, 255);
     pub const YELLOW: RGB = RGB::new(255, 255, 0);
     pub const MAGENTA: RGB = RGB::new(255, 0, 255);
@@ -217,5 +241,15 @@ impl From<u32> for RGB {
     #[inline(always)]
     fn from(value: u32) -> Self {
         Self(value)
+    }
+}
+
+impl fmt::Debug for RGB {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_tuple("RGB")
+            .field(&self.red())
+            .field(&self.green())
+            .field(&self.blue())
+            .finish()
     }
 }

@@ -8,10 +8,11 @@ mod limine;
 mod memory;
 mod terminal;
 
-use core::arch::asm;
 use core::panic::PanicInfo;
+use core::arch::asm;
 
 use crate::terminal::logger::{self, LogLevel, Logger};
+use crate::terminal::tty;
 pub static LOGGER: Logger = Logger::new(LogLevel::Debug);
 
 #[unsafe(no_mangle)]
@@ -20,13 +21,12 @@ pub extern "C" fn _start() -> ! {
     cpu::interrupts::init();
     memory::frame_allocator::init();
     drivers::framebuffer::init();
-    terminal::init();
+    tty::init();
 
     logger::info!("Initialization sequence over!");
 
-    memory::frame_allocator::with_allocator(|a| a.stress());
 
-    logger::info!("Exit!");
+    logger::warning!("Exit!");
 
     halt();
 }
