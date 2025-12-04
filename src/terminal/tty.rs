@@ -4,7 +4,6 @@ use spin::{Mutex, Once};
 
 use crate::{
     drivers::framebuffer::{self, RGB},
-    halt,
     memory::{VirtualAddress, frame_allocator},
     terminal::{ansi::*, font, themes::Theme},
 };
@@ -131,7 +130,6 @@ impl<'buf> Terminal<'buf> {
         }
 
         let mut element = iterator.next();
-        let old_line = self.cursor.line;
         while let Some(ch) = element {
             match ch {
                 '\n' => self.jump_line(),

@@ -4,7 +4,7 @@ use crate::{
 };
 
 pub(super) extern "x86-interrupt" fn divide_error_handler(stack_frame: ISF) {
-    panic!("DIVIDE ERROR INTERRUPT stack_frame: {:?}", stack_frame);
+    panic!("DIVIDE ERROR INTERRUPT stack_frame: {:#?}", stack_frame);
 }
 
 pub(super) extern "x86-interrupt" fn debug_handler(stack_frame: ISF) {
@@ -68,14 +68,14 @@ pub(super) extern "x86-interrupt" fn stack_segment_fault_handler(stack_frame: IS
 
 pub(super) extern "x86-interrupt" fn general_protx_fault_handler(stack_frame: ISF, error: SSErr) {
     panic!(
-        "GENERAL PROTECTION FAULT INTERRUPT stack_frame: {:?}, error: {:?}",
+        "GENERAL PROTECTION FAULT INTERRUPT stack_frame: {:#?}, error: {:?}",
         stack_frame, error
     );
 }
 
 pub(super) extern "x86-interrupt" fn page_fault_handler(stack_frame: ISF, error: PageFaultError) {
     panic!(
-        "PAGE FAULT INTERRUPT stack_frame: {:?}, error: {:?}",
+        "PAGE FAULT INTERRUPT stack_frame: {:#?}, error: {:?}",
         stack_frame, error
     );
 }
