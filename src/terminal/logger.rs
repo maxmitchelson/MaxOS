@@ -1,6 +1,6 @@
 use core::fmt;
 use fmt::Write;
-use crate::terminal::{tty::TerminalStdin};
+use crate::terminal::tty::{self, BufferWriter};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum LogLevel {
@@ -47,8 +47,11 @@ impl Logger {
             return;
         }
 
-        let mut stdin = TerminalStdin::new();
-        let _ = writeln!(stdin, "[{:#}]: {}", level, message);
+        let mut buffer = [0; 1024];
+        let mut writer = BufferWriter::new(&mut buffer);
+ 
+        let _ = writeln!(writer, "[{:#}]: {}", level, message);
+        tty::TERMINAL.get().unwrap().lock().write_str(writer.as_str());
     }
 
     pub fn log_args(&self, level: LogLevel, message: fmt::Arguments) {
@@ -56,8 +59,11 @@ impl Logger {
             return;
         }
 
-        let mut stdin = TerminalStdin::new();
-        let _ = writeln!(stdin, "[{:#}]: {}", level, message);
+        let mut buffer = [0; 1024];
+        let mut writer = BufferWriter::new(&mut buffer);
+ 
+        let _ = writeln!(writer, "[{:#}]: {}", level, message);
+        tty::TERMINAL.get().unwrap().lock().write_str(writer.as_str());
     }
 
     pub fn debug(&self, message: &str) {
@@ -100,8 +106,6 @@ impl Logger {
         self.log_args(LogLevel::Critical, message);
     }
 }
-
-
 
 macro_rules! debug {
     ($($arg:tt)*) => {{

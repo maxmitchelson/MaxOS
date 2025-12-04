@@ -5,29 +5,47 @@ use spin::{Mutex, Once};
 use crate::{
     drivers::framebuffer::{self, RGB},
     memory::{VirtualAddress, frame_allocator},
-    terminal::{ansi::*, font, logger, themes::Theme},
+    terminal::{ansi::*, font, themes::Theme},
 };
 
 const HORIZONTAL_MARGIN: usize = 20;
 const VERTICAL_MARGIN: usize = 20;
 
-static TERMINAL: Once<Mutex<Terminal>> = Once::new();
+pub static TERMINAL: Once<Mutex<Terminal>> = Once::new();
 
 pub fn init() {
     TERMINAL.call_once(|| Mutex::new(Terminal::new()));
 }
 
-pub struct TerminalStdin {}
+pub struct BufferWriter<'buf> {
+    buffer: &'buf mut [u8],
+    cursor: usize,
+}
 
-impl TerminalStdin {
-    pub fn new() -> Self {
-        Self {}
+impl<'buf> BufferWriter<'buf> {
+    pub fn new(buffer: &'buf mut [u8]) -> Self {
+        Self { buffer, cursor: 0 }
+    }
+
+    pub fn as_str(&self) -> &str {
+        unsafe {
+            core::str::from_utf8_unchecked(&self.buffer[..self.cursor])
+        }
     }
 }
 
-impl fmt::Write for TerminalStdin {
+impl<'buf> fmt::Write for BufferWriter<'buf> {
     fn write_str(&mut self, s: &str) -> fmt::Result {
-        TERMINAL.get().unwrap().lock().write_str(s)
+        let bytes = s.as_bytes();
+        let remaining_space = self.buffer.len() - self.cursor;
+        if remaining_space < bytes.len() {
+            self.buffer[self.cursor..].copy_from_slice(&bytes[..remaining_space]);
+            Ok(())
+        } else {
+            self.buffer[self.cursor..self.cursor +  bytes.len()].copy_from_slice(bytes);
+            self.cursor += bytes.len();
+            Ok(())
+        }
     }
 }
 
@@ -211,7 +229,7 @@ impl<'buf> Terminal<'buf> {
     /// Note: The origin (0,0) is in the top-left corner and axes are positive to the right and downards.
     fn move_cursor_absolute(&mut self, line: usize, column: usize) {
         let line = self.scroll + line;
-        self.cursor.line = line.clamp(self.scroll, self.scroll+self.height);
+        self.cursor.line = line.clamp(self.scroll, self.scroll + self.height);
         self.cursor.column = column.clamp(0, self.buffer.get_line_length(self.cursor.line));
     }
 
