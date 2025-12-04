@@ -4,6 +4,7 @@ use spin::{Mutex, Once};
 
 use crate::{
     drivers::framebuffer::{self, RGB},
+    halt,
     memory::{VirtualAddress, frame_allocator},
     terminal::{ansi::*, font, themes::Theme},
 };
@@ -28,9 +29,7 @@ impl<'buf> BufferWriter<'buf> {
     }
 
     pub fn as_str(&self) -> &str {
-        unsafe {
-            core::str::from_utf8_unchecked(&self.buffer[..self.cursor])
-        }
+        unsafe { core::str::from_utf8_unchecked(&self.buffer[..self.cursor]) }
     }
 }
 
@@ -42,7 +41,7 @@ impl<'buf> fmt::Write for BufferWriter<'buf> {
             self.buffer[self.cursor..].copy_from_slice(&bytes[..remaining_space]);
             Ok(())
         } else {
-            self.buffer[self.cursor..self.cursor +  bytes.len()].copy_from_slice(bytes);
+            self.buffer[self.cursor..self.cursor + bytes.len()].copy_from_slice(bytes);
             self.cursor += bytes.len();
             Ok(())
         }
@@ -132,6 +131,7 @@ impl<'buf> Terminal<'buf> {
         }
 
         let mut element = iterator.next();
+        let old_line = self.cursor.line;
         while let Some(ch) = element {
             match ch {
                 '\n' => self.jump_line(),
@@ -142,7 +142,8 @@ impl<'buf> Terminal<'buf> {
 
             element = iterator.next();
         }
-        self.full_draw();
+
+        self.line_draw(self.cursor.line);
     }
 
     /// Start or continue parsing of an ANSI sequence using the ANSI handler.
@@ -185,12 +186,20 @@ impl<'buf> Terminal<'buf> {
     fn advance_cursor_wrapping(&mut self, len: usize) {
         let new_col_with_overflow = self.cursor.column + len;
         self.cursor.column = (new_col_with_overflow) % self.buffer.max_columns;
-        self.cursor.line += (new_col_with_overflow) / self.buffer.max_columns;
+        let cursor_delta = (new_col_with_overflow) / self.buffer.max_columns;
+        self.cursor.line += cursor_delta;
 
         if self.cursor.line > self.scroll + self.height {
+            let old_scroll = self.scroll;
             self.scroll = self.cursor.line - self.height;
-        } else if self.cursor.line < self.scroll {
-            self.scroll = self.cursor.line;
+            let scroll_delta = self.scroll - old_scroll;
+            if scroll_delta != 0 {
+                self.scroll_draw(scroll_delta, false);
+            }
+        }
+
+        if cursor_delta != 0 {
+            self.line_draw(self.cursor.line - cursor_delta);
         }
     }
 
@@ -198,6 +207,11 @@ impl<'buf> Terminal<'buf> {
     fn jump_line(&mut self) {
         self.cursor.column = 0;
         self.cursor.line += 1;
+        if self.cursor.line - self.scroll > self.height {
+            self.scroll += 1;
+            self.scroll_draw(1, false);
+        }
+        self.line_draw(self.cursor.line - 1);
     }
 
     /// Executes the provided ANSI `command`
@@ -292,10 +306,8 @@ impl<'buf> Terminal<'buf> {
         let mut fb = framebuffer::driver().device();
         fb.fill(self.theme.background);
 
-        let mut logical_x = 0;
-        let mut logical_y = 0;
-        'all: for row in rows {
-            for cell in row.iter().flatten() {
+        for (logical_y, row) in rows.enumerate() {
+            for (logical_x, cell) in row.iter().flatten().enumerate() {
                 let raster = font::get_raster(cell.content).unwrap();
                 let visual_x = HORIZONTAL_MARGIN + logical_x * font::WIDTH;
                 let visual_y = VERTICAL_MARGIN + logical_y * font::HEIGHT;
@@ -309,24 +321,59 @@ impl<'buf> Terminal<'buf> {
                         fb.set_pixel(char_x + visual_x, char_y + visual_y, color);
                     }
                 }
-
-                if logical_x + 1 == self.width {
-                    logical_x = 0;
-                    logical_y += 1;
-                    if logical_y == self.height {
-                        break 'all;
-                    }
-                } else {
-                    logical_x += 1;
-                }
-            }
-            logical_x = 0;
-            logical_y += 1;
-            if logical_y == self.height {
-                break;
             }
         }
+        fb.refresh();
+    }
 
+    /// Draw the view scrolled by `scroll_delta` rows. If `clear_scroll` is set, this also clears
+    /// the rows that have been scrolled up to avoid them being duplicated.
+    pub fn scroll_draw(&self, scroll_delta: usize, clear_scroll: bool) {
+        let mut fb = framebuffer::driver().device();
+        let fb_width = fb.width();
+
+        let fb_buffer = fb.get_back_buffer_mut();
+        let screen_rows = scroll_delta * font::HEIGHT;
+
+        let start_dst = VERTICAL_MARGIN * fb_width;
+        let start_src = start_dst + screen_rows * fb_width;
+        let end_src = fb_buffer.len() - start_dst;
+        fb_buffer.copy_within(start_src..end_src, start_dst);
+        if clear_scroll {
+            let end_dst = end_src - start_src + start_dst;
+            fb_buffer[end_dst..end_src].fill(self.theme.background.into());
+        }
+        fb.refresh();
+    }
+
+    /// Draw only the specified line
+    pub fn line_draw(&self, line: usize) {
+        if line >= self.buffer.max_lines {
+            return;
+        }
+        let row = self.buffer.get_view(line, 1);
+
+        let mut fb = framebuffer::driver().device();
+        let fb_width = fb.width();
+        let y_offset = VERTICAL_MARGIN + font::HEIGHT * (line - self.scroll);
+        let mut x_offset = HORIZONTAL_MARGIN;
+        fb.get_back_buffer_mut()[y_offset * fb_width..(y_offset + font::HEIGHT) * fb_width]
+            .fill(self.theme.background.into());
+
+        for cell in row.iter().flatten() {
+            let raster = font::get_raster(cell.content).unwrap();
+
+            for (char_y, char_row) in raster.raster().iter().enumerate() {
+                for (char_x, alpha) in char_row.iter().enumerate() {
+                    let fg_color = self.ansi_to_rgb(cell.style.foreground);
+                    let bg_color = self.ansi_to_rgb(cell.style.background);
+                    let color = RGB::alpha_blend(fg_color, bg_color, *alpha);
+
+                    fb.set_pixel(char_x + x_offset, char_y + y_offset, color);
+                }
+            }
+            x_offset += font::WIDTH;
+        }
         fb.refresh();
     }
 }
@@ -377,7 +424,7 @@ impl<'txt> TerminalBuffer<'txt> {
             slice::from_raw_parts_mut(cells_ptr, length)
         };
 
-        Self {
+         Self {
             max_lines: lines,
             max_columns: columns,
             buffer: cells_buffer,
@@ -413,7 +460,7 @@ impl<'txt> TerminalBuffer<'txt> {
     #[inline(always)]
     fn write_char(&mut self, ch: char, line: usize, column: usize, style: Style) {
         let pos = line * self.max_columns + column;
-        if pos + 1 == self.buffer.len() {
+        if pos + 1 >= self.buffer.len() {
             unsafe { self.grow_buffer() };
         }
 

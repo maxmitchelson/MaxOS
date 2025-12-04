@@ -422,7 +422,7 @@ impl BuddyAllocator {
 
     #[inline(always)]
     pub fn reallocate(&mut self, address: PhysicalAddress, size: usize) -> PhysicalAddress {
-        if size > 1 << self.max_order {
+        if size > PAGE_SIZE * (1 << self.max_order) {
             panic!(
                 "Cannot reallocate for size {size} because it is greater than the maximum supported size"
             );

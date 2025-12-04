@@ -57,7 +57,7 @@ impl FramebufferDriver {
 unsafe impl Send for FramebufferDriver {}
 unsafe impl Sync for FramebufferDriver {}
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct FramebufferInfo {
     pitch: usize,
     width: usize,

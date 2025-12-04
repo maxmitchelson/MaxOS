@@ -11,6 +11,7 @@ mod terminal;
 use core::panic::PanicInfo;
 use core::arch::asm;
 
+use crate::drivers::framebuffer;
 use crate::terminal::logger::{self, LogLevel, Logger};
 use crate::terminal::tty;
 pub static LOGGER: Logger = Logger::new(LogLevel::Debug);
@@ -23,9 +24,11 @@ pub extern "C" fn _start() -> ! {
     drivers::framebuffer::init();
     tty::init();
 
-    logger::info!("Initialization sequence over!");
+    logger::info!("Console initiated");
+    logger::info!("Display info: {:?}", framebuffer::driver().info());
 
-    logger::warning!("Exit!");
+
+    logger::warning!("Quitting!");
 
     halt();
 }
