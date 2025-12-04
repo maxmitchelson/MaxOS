@@ -242,15 +242,20 @@ impl<'buf> Terminal<'buf> {
     /// Ensures the results are valid line and column.
     /// Note: The origin (0,0) is in the top-left corner and axes are positive to the right and downards.
     fn move_cursor_absolute(&mut self, line: usize, column: usize) {
+        let old_line = self.cursor.line;
         let line = self.scroll + line;
         self.cursor.line = line.clamp(self.scroll, self.scroll + self.height);
         self.cursor.column = column.clamp(0, self.buffer.get_line_length(self.cursor.line));
+
+        self.line_draw(old_line);
+        self.line_draw(self.cursor.line);
     }
 
     /// Moves the cursor according to the provided deltas.
     /// Ensures the results are valid line and column.
     /// Note: The origin (0,0) is in the top-left corner and axes are positive to the right and downards.
     fn move_cursor_relative(&mut self, line_delta: isize, column_delta: isize) {
+        let old_line = self.cursor.line;
         self.cursor.line = self
             .cursor
             .line
@@ -261,6 +266,9 @@ impl<'buf> Terminal<'buf> {
             .column
             .saturating_add_signed(column_delta)
             .min(self.buffer.get_line_length(self.cursor.line));
+
+        self.line_draw(old_line);
+        self.line_draw(self.cursor.line);
     }
 
     /// Scrolls downwards by delta if it's positive and upwards by -delta otherwise.
@@ -270,6 +278,7 @@ impl<'buf> Terminal<'buf> {
             .scroll
             .saturating_add_signed(delta)
             .min(self.buffer.max_lines);
+        self.full_draw();
     }
 
     fn set_background(&mut self, color: AnsiColor) {
