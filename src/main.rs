@@ -25,7 +25,6 @@ pub extern "C" fn _start() -> ! {
 
     logger::info!("Initialization sequence over!");
 
-
     logger::warning!("Exit!");
 
     halt();

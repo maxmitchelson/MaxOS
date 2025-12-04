@@ -21,7 +21,7 @@ pub struct TerminalStdin {}
 
 impl TerminalStdin {
     pub fn new() -> Self {
-        return Self {};
+        Self {}
     }
 }
 
@@ -139,7 +139,6 @@ impl<'buf> Terminal<'buf> {
             }
             ParserResult::Incomplete => (),
             ParserResult::Error(ansi_error) => {
-                // logger::error!("{:#?}", ansi_error); // TODO: REMOVE
                 self.ansi_handler.reset();
             }
         }
@@ -211,7 +210,8 @@ impl<'buf> Terminal<'buf> {
     /// Ensures the results are valid line and column.
     /// Note: The origin (0,0) is in the top-left corner and axes are positive to the right and downards.
     fn move_cursor_absolute(&mut self, line: usize, column: usize) {
-        self.cursor.line = line.clamp(0, self.buffer.max_lines);
+        let line = self.scroll + line;
+        self.cursor.line = line.clamp(self.scroll, self.scroll+self.height);
         self.cursor.column = column.clamp(0, self.buffer.get_line_length(self.cursor.line));
     }
 
