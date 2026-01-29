@@ -155,7 +155,7 @@ impl<'buf> Terminal<'buf> {
                 self.execute_ansi_command(command);
             }
             ParserResult::Incomplete => (),
-            ParserResult::Error(ansi_error) => {
+            ParserResult::Error(_ansi_error) => {
                 self.ansi_handler.reset();
             }
         }
@@ -192,7 +192,8 @@ impl<'buf> Terminal<'buf> {
             self.scroll = self.cursor.line - self.height;
             let scroll_delta = self.scroll - old_scroll;
             if scroll_delta != 0 {
-                self.scroll_draw(scroll_delta, false);
+                self.scroll_framebuffer(scroll_delta, false);
+                framebuffer::driver().device().refresh();
             }
         }
 
@@ -207,7 +208,7 @@ impl<'buf> Terminal<'buf> {
         self.cursor.line += 1;
         if self.cursor.line - self.scroll > self.height {
             self.scroll += 1;
-            self.scroll_draw(1, false);
+            self.scroll_framebuffer(1, false);
         }
         self.line_draw(self.cursor.line - 1);
     }
@@ -333,27 +334,26 @@ impl<'buf> Terminal<'buf> {
         fb.refresh();
     }
 
-    /// Draw the view scrolled by `scroll_delta` rows. If `clear_scroll` is set, this also clears
-    /// the rows that have been scrolled up to avoid them being duplicated.
-    pub fn scroll_draw(&self, scroll_delta: usize, clear_scroll: bool) {
+    /// Scroll the framebuffer by `scroll_delta` rows and preserves the top margin.
+    /// If `clear_scroll` is set, this also clears the rows that have been scrolled up
+    /// to avoid them being duplicated.
+    pub fn scroll_framebuffer(&self, scroll_delta: usize, clear_scroll: bool) {
         let mut fb = framebuffer::driver().device();
-        let fb_width = fb.width();
+        let fb_info = framebuffer::driver().info();
 
-        let fb_buffer = fb.get_back_buffer_mut();
         let screen_rows = scroll_delta * font::HEIGHT;
+        fb.scroll(screen_rows);
 
-        let start_dst = VERTICAL_MARGIN * fb_width;
-        let start_src = start_dst + screen_rows * fb_width;
-        let end_src = fb_buffer.len() - start_dst;
-        fb_buffer.copy_within(start_src..end_src, start_dst);
         if clear_scroll {
-            let end_dst = end_src - start_src + start_dst;
-            fb_buffer[end_dst..end_src].fill(self.theme.background.into());
+            let clear_start = fb_info.buffer_len()
+                - fb_info.pitch() * (screen_rows * font::HEIGHT + VERTICAL_MARGIN);
+            fb.partial_fill(clear_start.., self.theme.background);
         }
-        fb.refresh();
+
+        fb.partial_fill(..fb_info.pitch() * VERTICAL_MARGIN, self.theme.background);
     }
 
-    /// Draw only the specified line
+    /// Draw only the specified line, does not refresh the screen
     pub fn line_draw(&self, line: usize) {
         if line >= self.buffer.max_lines {
             return;
@@ -364,8 +364,10 @@ impl<'buf> Terminal<'buf> {
         let fb_width = fb.width();
         let y_offset = VERTICAL_MARGIN + font::HEIGHT * (line - self.scroll);
         let mut x_offset = HORIZONTAL_MARGIN;
-        fb.get_back_buffer_mut()[y_offset * fb_width..(y_offset + font::HEIGHT) * fb_width]
-            .fill(self.theme.background.into());
+
+        let line_start = y_offset * fb_width;
+        let line_end = (y_offset + font::HEIGHT) * fb_width;
+        fb.partial_fill(line_start..line_end, self.theme.background);
 
         for cell in row.iter().flatten() {
             let raster = font::get_raster(cell.content).unwrap();
@@ -431,7 +433,7 @@ impl<'txt> TerminalBuffer<'txt> {
             slice::from_raw_parts_mut(cells_ptr, length)
         };
 
-         Self {
+        Self {
             max_lines: lines,
             max_columns: columns,
             buffer: cells_buffer,

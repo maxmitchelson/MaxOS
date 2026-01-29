@@ -1,9 +1,12 @@
+use core::ops::{Bound, RangeBounds};
 use core::{fmt, slice};
 
 use spin::{Mutex, MutexGuard, Once};
 
-use crate::limine;
 use crate::memory::{align_up, frame_allocator};
+use crate::terminal::logger;
+use crate::terminal::tty::TERMINAL;
+use crate::{LOGGER, limine};
 
 static DRIVER: Once<FramebufferDriver> = Once::new();
 
@@ -19,7 +22,7 @@ pub fn init() {
 
     let buffer_size = info.pitch * info.height;
     let back_buffer = unsafe {
-let back_ptr = frame_allocator::allocate(buffer_size*4)
+        let back_ptr = frame_allocator::allocate(buffer_size * 4)
             .to_virtual()
             .to_ptr::<u32>();
 
@@ -30,6 +33,7 @@ let back_ptr = frame_allocator::allocate(buffer_size*4)
 
     let primary_framebuffer = Framebuffer {
         info,
+        back_buffer_cursor: 0,
         front_buffer,
         back_buffer,
     };
@@ -131,6 +135,7 @@ impl FramebufferInfo {
 
 pub struct Framebuffer<'a> {
     info: FramebufferInfo,
+    back_buffer_cursor: usize,
     back_buffer: &'a mut [u32],
     front_buffer: &'a mut [u32],
 }
@@ -138,16 +143,13 @@ pub struct Framebuffer<'a> {
 impl<'a> Framebuffer<'a> {
     #[inline(always)]
     pub fn set_pixel(&mut self, x: usize, y: usize, color: RGB) {
-        self.back_buffer[x + y * self.info.pitch] = color.into();
-    }
-
-    #[inline(always)]
-    pub fn get_back_buffer_mut(&mut self) -> &mut [u32] {
         self.back_buffer
+            [(x + y * self.info.pitch + self.back_buffer_cursor) % self.back_buffer.len()] =
+            color.into();
     }
 
     #[inline(always)]
-    pub fn get_back_buffer(&self) -> &[u32] {
+    pub fn update_from_slice(&mut self) -> &mut [u32] {
         self.back_buffer
     }
 
@@ -156,9 +158,45 @@ impl<'a> Framebuffer<'a> {
         self.back_buffer.fill(color.into())
     }
 
+    pub fn partial_fill(&mut self, range: impl RangeBounds<usize>, color: RGB) {
+        let start = match range.start_bound() {
+            Bound::Included(&i) => i,
+            Bound::Excluded(&i) => i + 1,
+            Bound::Unbounded => 0,
+        };
+
+        let end = match range.end_bound() {
+            Bound::Included(&i) => i + 1,
+            Bound::Excluded(&i) => i,
+            Bound::Unbounded => self.back_buffer.len(),
+        };
+
+        assert!(start <= end);
+        assert!(end <= self.back_buffer.len());
+
+        let (head, tail) = self.back_buffer.split_at_mut(self.back_buffer_cursor);
+
+        if start < tail.len() {
+            let tail_end = end.min(tail.len());
+            tail[start..tail_end].fill(color.into());
+        }
+
+        if end > tail.len() {
+            let head_start = start.saturating_sub(tail.len());
+            let head_end = end - tail.len();
+            head[head_start..head_end].fill(color.into());
+        }
+    }
+
     #[inline(always)]
     pub fn refresh(&mut self) {
-        self.front_buffer.copy_from_slice(&self.back_buffer);
+        let (head, tail) = self.back_buffer.split_at(self.back_buffer_cursor);
+        self.front_buffer[..tail.len()].copy_from_slice(tail);
+        self.front_buffer[tail.len()..].copy_from_slice(head);
+    }
+
+    pub fn scroll(&mut self, height: usize) {
+        self.back_buffer_cursor = (self.back_buffer_cursor + self.info.pitch * height) % self.back_buffer.len();
     }
 
     #[inline]
